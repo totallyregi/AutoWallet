@@ -58,9 +58,14 @@ export async function extractTransactionFromText(
     result = await fallback.generateContent(prompt);
   }
   const raw = result.response.text().trim();
-  const json = parseJsonFromModel(raw) as Record<string, unknown>;
-  const normalized = applyAmountFallback(json, text);
-  return extractedTransactionSchema.parse(normalized);
+  const parsed = safeParseModelJson(raw);
+  const normalized = applyAmountFallback(parsed, text);
+  try {
+    return extractedTransactionSchema.parse(normalized);
+  } catch {
+    const heuristic = applyAmountFallback(buildHeuristicExtraction(text), text);
+    return extractedTransactionSchema.parse(heuristic);
+  }
 }
 
 export async function extractTransactionFromImageBuffer(
@@ -91,9 +96,14 @@ export async function extractTransactionFromImageBuffer(
     result = await fallback.generateContent(parts);
   }
   const raw = result.response.text().trim();
-  const json = parseJsonFromModel(raw) as Record<string, unknown>;
-  const normalized = applyAmountFallback(json, prompt);
-  return extractedTransactionSchema.parse(normalized);
+  const parsed = safeParseModelJson(raw);
+  const normalized = applyAmountFallback(parsed, prompt);
+  try {
+    return extractedTransactionSchema.parse(normalized);
+  } catch {
+    const heuristic = applyAmountFallback(buildHeuristicExtraction(prompt), prompt);
+    return extractedTransactionSchema.parse(heuristic);
+  }
 }
 
 function parseJsonFromModel(raw: string): unknown {
@@ -102,6 +112,60 @@ function parseJsonFromModel(raw: string): unknown {
     t = t.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   }
   return JSON.parse(t) as unknown;
+}
+
+function safeParseModelJson(raw: string): Record<string, unknown> {
+  try {
+    return parseJsonFromModel(raw) as Record<string, unknown>;
+  } catch {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
+      } catch {
+        // Continue to heuristic extraction below.
+      }
+    }
+    return buildHeuristicExtraction(raw);
+  }
+}
+
+function buildHeuristicExtraction(sourceText: string): Record<string, unknown> {
+  const nowIso = new Date().toISOString();
+  const upper = sourceText.toUpperCase();
+
+  const currencyAmountMatch = upper.match(
+    /\b([A-Z]{3})\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|[0-9]+(?:\.[0-9]{2})?)\b/,
+  );
+  const usdMatch = sourceText.match(
+    /\$\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|[0-9]+(?:\.[0-9]{2})?)/,
+  );
+  const merchantMatch = sourceText.match(
+    /\b([A-Z0-9][A-Z0-9&.,' -]{2,40})\s+(?:USD|SGD|MYR|EUR|GBP|AUD|CAD)\s+[0-9]/i,
+  );
+
+  const amount = currencyAmountMatch
+    ? Number.parseFloat(currencyAmountMatch[2].replace(/,/g, ""))
+    : usdMatch
+      ? Number.parseFloat(usdMatch[1].replace(/,/g, ""))
+      : NaN;
+
+  const currency = currencyAmountMatch
+    ? currencyAmountMatch[1]
+    : usdMatch
+      ? "USD"
+      : "USD";
+
+  return {
+    amount: Number.isFinite(amount) && amount > 0 ? amount : 0.01,
+    currency,
+    merchant: merchantMatch?.[1]?.trim() ?? null,
+    date: nowIso,
+    categorySlug: "other",
+    notes: "Fallback extraction used due ambiguous email format.",
+    confidence: 0.35,
+  };
 }
 
 function applyAmountFallback(
