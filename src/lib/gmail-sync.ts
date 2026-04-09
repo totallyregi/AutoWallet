@@ -21,15 +21,55 @@ type GmailPayload = {
   parts?: GmailPayload[] | null;
 };
 
-function getGmailClient() {
-  const refresh = process.env.GMAIL_REFRESH_TOKEN;
+/**
+ * Gmail reads the signed-in user's Google OAuth tokens from the Account table (Auth.js).
+ * Optional legacy: GMAIL_REFRESH_TOKEN env (single shared mailbox) if the user has no Google-linked account row.
+ */
+async function getGmailClientForUser(userId: string) {
   const cid = process.env.GOOGLE_CLIENT_ID;
   const cs = process.env.GOOGLE_CLIENT_SECRET;
-  if (!refresh || !cid || !cs) {
-    throw new Error("Gmail OAuth env not fully configured");
+  if (!cid || !cs) {
+    throw new Error(
+      "Google OAuth client is not configured (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET).",
+    );
   }
+
+  const account = await prisma.account.findFirst({
+    where: { userId, provider: "google" },
+    select: {
+      refresh_token: true,
+      access_token: true,
+      expires_at: true,
+    },
+  });
+
+  const fromAccount = account?.refresh_token?.trim() ?? null;
+  const legacyEnv = process.env.GMAIL_REFRESH_TOKEN?.trim() || null;
+
+  let refresh: string | null = null;
+  if (fromAccount) {
+    refresh = fromAccount;
+  } else if (!account && legacyEnv) {
+    refresh = legacyEnv;
+  } else if (account && !fromAccount) {
+    throw new Error(
+      "Google is linked but Gmail access was not granted (no refresh token). On the Dashboard → Gmail tab, click “Reconnect Google (Gmail)” and accept permissions.",
+    );
+  }
+
+  if (!refresh) {
+    throw new Error(
+      "Gmail is not connected. Sign in with Google once, or on the Dashboard → Gmail tab click “Reconnect Google (Gmail)” to link the same Google account as your inbox. (Optional: set GMAIL_REFRESH_TOKEN only if you intentionally use a single shared mailbox without Google sign-in.)",
+    );
+  }
+
   const oauth2 = new google.auth.OAuth2(cid, cs);
-  oauth2.setCredentials({ refresh_token: refresh });
+  oauth2.setCredentials({
+    refresh_token: refresh,
+    access_token: account?.access_token ?? undefined,
+    expiry_date: account?.expires_at ? account.expires_at * 1000 : undefined,
+  });
+
   return google.gmail({ version: "v1", auth: oauth2 });
 }
 
@@ -38,7 +78,7 @@ function mapGmailApiError(e: unknown): Error {
   const raw = e instanceof Error ? e.message : String(e);
   if (raw.includes("invalid_grant")) {
     return new Error(
-      "Gmail: invalid_grant — your refresh token is expired or revoked. In Google Cloud OAuth Playground (or your OAuth flow), authorize Gmail again with the SAME Client ID/Secret as Vercel, copy the new refresh token into GMAIL_REFRESH_TOKEN, redeploy. Also ensure that Gmail account actually has the messages you expect.",
+      "Gmail: invalid_grant — Google revoked or expired this connection. On the Dashboard → Gmail tab, click “Reconnect Google (Gmail)” and sign in with the same Google account as your inbox. You no longer need to paste tokens from OAuth Playground unless you use the optional GMAIL_REFRESH_TOKEN fallback.",
     );
   }
   return e instanceof Error ? e : new Error(raw);
@@ -56,7 +96,7 @@ async function getSenderQuery(userId: string) {
 export async function listGmailMessagesForUser(
   userId: string,
 ): Promise<GmailMessagePreview[]> {
-  const gmail = getGmailClient();
+  const gmail = await getGmailClientForUser(userId);
   const senderQuery = await getSenderQuery(userId);
   const maxResults = Number(process.env.GMAIL_MAX_RESULTS ?? "20");
   const lookbackDays = Number(process.env.GMAIL_LOOKBACK_DAYS ?? "14");
@@ -115,7 +155,7 @@ export async function parseAndStoreGmailMessage(
   userId: string,
   preview: GmailMessagePreview,
 ) {
-  const gmail = getGmailClient();
+  const gmail = await getGmailClientForUser(userId);
   let full;
   try {
     full = await gmail.users.messages.get({
@@ -222,7 +262,7 @@ function extractTextFromPayload(payload: GmailPayload | null | undefined): strin
 
 /**
  * Fetches recent Gmail messages and ingests spend-like notifications.
- * Requires GMAIL_REFRESH_TOKEN + GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET.
+ * Requires the user's linked Google account (refresh_token in Account) or optional GMAIL_REFRESH_TOKEN.
  */
 export async function syncGmailMessagesForUser(userId: string): Promise<{
   created: number;

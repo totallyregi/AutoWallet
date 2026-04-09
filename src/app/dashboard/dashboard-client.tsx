@@ -1,6 +1,7 @@
 "use client";
 
 import type { TransactionJson } from "@/lib/transaction-json";
+import { signIn } from "next-auth/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Cell,
@@ -54,7 +55,11 @@ type GmailMessagePreview = {
   tracked?: boolean;
 };
 
-export function DashboardClient() {
+export function DashboardClient({
+  googleOAuthEnabled,
+}: {
+  googleOAuthEnabled: boolean;
+}) {
   const [activeTab, setActiveTab] = useState<(typeof TABS)[number]["id"]>(
     "overview",
   );
@@ -435,6 +440,28 @@ export function DashboardClient() {
 
         {activeTab === "gmail" && (
           <section className="fade-slide-in space-y-6">
+            {googleOAuthEnabled && (
+              <div className="rounded-2xl border border-sky-200 bg-sky-50/80 p-4 text-sm dark:border-sky-900/50 dark:bg-sky-950/30">
+                <p className="mb-3 text-zinc-700 dark:text-zinc-300">
+                  Gmail uses your Google sign-in token (stored securely)—not a manual Playground token. If you see{" "}
+                  <span className="font-mono text-xs">invalid_grant</span> or Gmail stopped working, reconnect once
+                  with the same Google account as your inbox.
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    signIn(
+                      "google",
+                      { callbackUrl: "/dashboard" },
+                      { prompt: "consent", access_type: "offline" },
+                    )
+                  }
+                  className="h-9 rounded-lg bg-sky-600 px-4 text-sm font-medium text-white hover:bg-sky-700 dark:bg-sky-500 dark:hover:bg-sky-400"
+                >
+                  Reconnect Google (Gmail)
+                </button>
+              </div>
+            )}
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
               <h2 className="mb-3 text-lg font-medium">Gmail bank sender filter</h2>
               <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">

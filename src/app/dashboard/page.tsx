@@ -28,7 +28,11 @@ export default async function DashboardPage() {
           </form>
         </div>
       </nav>
-      <DashboardClient />
+      <DashboardClient
+        googleOAuthEnabled={Boolean(
+          process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
+        )}
+      />
     </div>
   );
 }
