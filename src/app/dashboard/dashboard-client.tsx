@@ -478,47 +478,26 @@ export function DashboardClient({
     }`;
 
   return (
-    <div
-      className={`grid gap-6 ${
-        activeTab === "overview" ? "xl:grid-cols-[250px_minmax(0,1fr)]" : ""
-      }`}
-    >
-      {activeTab === "overview" && (
-        <aside className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 xl:sticky xl:top-6 xl:h-fit">
-          <p className="px-3 pb-3 pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Workspace
-          </p>
-          <nav className="grid gap-1">
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`${tabButtonClass(tab.id)} text-left`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        </aside>
-      )}
+    <div className="grid gap-6 xl:grid-cols-[250px_minmax(0,1fr)]">
+      <aside className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 xl:sticky xl:top-6 xl:h-fit">
+        <p className="px-3 pb-3 pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+          Workspace
+        </p>
+        <nav className="grid gap-1">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`${tabButtonClass(tab.id)} text-left`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </aside>
 
       <div className="space-y-6">
-        {activeTab !== "overview" && (
-          <nav className="flex flex-wrap gap-2 rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={tabButtonClass(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        )}
-
         {activeTab === "overview" && (
           <header className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:flex-row sm:items-end sm:justify-between">
             <div>
