@@ -33,6 +33,17 @@ function getGmailClient() {
   return google.gmail({ version: "v1", auth: oauth2 });
 }
 
+/** Maps Google OAuth errors to actionable messages for the dashboard. */
+function mapGmailApiError(e: unknown): Error {
+  const raw = e instanceof Error ? e.message : String(e);
+  if (raw.includes("invalid_grant")) {
+    return new Error(
+      "Gmail: invalid_grant — your refresh token is expired or revoked. In Google Cloud OAuth Playground (or your OAuth flow), authorize Gmail again with the SAME Client ID/Secret as Vercel, copy the new refresh token into GMAIL_REFRESH_TOKEN, redeploy. Also ensure that Gmail account actually has the messages you expect.",
+    );
+  }
+  return e instanceof Error ? e : new Error(raw);
+}
+
 async function getSenderQuery(userId: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -50,23 +61,33 @@ export async function listGmailMessagesForUser(
   const maxResults = Number(process.env.GMAIL_MAX_RESULTS ?? "20");
   const lookbackDays = Number(process.env.GMAIL_LOOKBACK_DAYS ?? "14");
 
-  const list = await gmail.users.messages.list({
-    userId: "me",
-    maxResults,
-    q: `newer_than:${lookbackDays}d${senderQuery}`,
-  });
+  let list;
+  try {
+    list = await gmail.users.messages.list({
+      userId: "me",
+      maxResults,
+      q: `newer_than:${lookbackDays}d${senderQuery}`,
+    });
+  } catch (e) {
+    throw mapGmailApiError(e);
+  }
 
   const messages = list.data.messages ?? [];
   const previews: GmailMessagePreview[] = [];
 
   for (const m of messages) {
     if (!m.id) continue;
-    const full = await gmail.users.messages.get({
-      userId: "me",
-      id: m.id,
-      format: "metadata",
-      metadataHeaders: ["Subject", "Message-ID", "From", "Date"],
-    });
+    let full;
+    try {
+      full = await gmail.users.messages.get({
+        userId: "me",
+        id: m.id,
+        format: "metadata",
+        metadataHeaders: ["Subject", "Message-ID", "From", "Date"],
+      });
+    } catch (e) {
+      throw mapGmailApiError(e);
+    }
     const headers = full.data.payload?.headers ?? [];
     const from =
       headers.find((h) => h.name?.toLowerCase() === "from")?.value ?? "";
@@ -95,11 +116,16 @@ export async function parseAndStoreGmailMessage(
   preview: GmailMessagePreview,
 ) {
   const gmail = getGmailClient();
-  const full = await gmail.users.messages.get({
-    userId: "me",
-    id: preview.gmailMessageId,
-    format: "full",
-  });
+  let full;
+  try {
+    full = await gmail.users.messages.get({
+      userId: "me",
+      id: preview.gmailMessageId,
+      format: "full",
+    });
+  } catch (e) {
+    throw mapGmailApiError(e);
+  }
   const fullText = extractTextFromPayload(full.data.payload as GmailPayload);
   const bestContent = (fullText || preview.snippet || "").slice(0, 16000);
 
