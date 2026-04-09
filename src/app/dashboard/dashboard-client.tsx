@@ -246,11 +246,17 @@ export function DashboardClient() {
       const data = (await res.json()) as {
         created?: boolean;
         duplicate?: boolean;
+        createdCount?: number;
+        lineCount?: number;
         error?: string;
       };
       if (!res.ok) throw new Error(data.error ?? "Failed to parse email");
       if (data.duplicate) setMessage("Email already parsed earlier.");
-      else setMessage("Parsed email and created transaction.");
+      else if ((data.createdCount ?? 0) > 1) {
+        setMessage(
+          `Parsed email: created ${data.createdCount} transactions (${data.lineCount ?? data.createdCount} lines detected).`,
+        );
+      } else setMessage("Parsed email and created transaction.");
       await load();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to parse email");

@@ -13,19 +13,28 @@ export async function GET() {
 
   try {
     const messages = await listGmailMessagesForUser(session.user.id);
-    const externalIds = messages.map((m) => `email:${m.messageId}`);
-    const existing = await prisma.transaction.findMany({
-      where: {
-        userId: session.user.id,
-        externalId: { in: externalIds },
-      },
-      select: { externalId: true },
+    let existing: { externalId: string | null }[] = [];
+    if (messages.length > 0) {
+      existing = await prisma.transaction.findMany({
+        where: {
+          userId: session.user.id,
+          OR: messages.flatMap((m) => [
+            { externalId: `email:${m.messageId}` },
+            { externalId: { startsWith: `email:${m.messageId}:` } },
+          ]),
+        },
+        select: { externalId: true },
+      });
+    }
+    const enriched = messages.map((m) => {
+      const prefix = `email:${m.messageId}`;
+      const tracked = existing.some(
+        (e) =>
+          e.externalId != null &&
+          (e.externalId === prefix || e.externalId.startsWith(`${prefix}:`)),
+      );
+      return { ...m, tracked };
     });
-    const trackedSet = new Set(existing.map((e) => e.externalId));
-    const enriched = messages.map((m) => ({
-      ...m,
-      tracked: trackedSet.has(`email:${m.messageId}`),
-    }));
     return NextResponse.json({ messages: enriched });
   } catch (e) {
     return NextResponse.json(

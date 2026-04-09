@@ -1,7 +1,7 @@
 import { google } from "googleapis";
 import prisma from "@/lib/prisma";
 import {
-  extractTransactionFromText,
+  extractTransactionsFromEmailText,
   parseOccurredAt,
   resolveCategoryId,
 } from "@/lib/gemini";
@@ -129,35 +129,68 @@ export async function parseAndStoreGmailMessage(
   const fullText = extractTextFromPayload(full.data.payload as GmailPayload);
   const bestContent = (fullText || preview.snippet || "").slice(0, 16000);
 
-  const externalId = `email:${preview.messageId}`;
-  const dup = await prisma.transaction.findUnique({
-    where: { externalId },
-  });
-  if (dup) return { created: false, duplicate: true };
-
   const combined = `From: ${preview.from}\nSubject: ${preview.subject}\nDate: ${preview.date}\n\n${bestContent}`;
-  const extracted = await extractTransactionFromText(combined);
-  const categoryId = await resolveCategoryId(extracted.categorySlug);
-  const confidence = extracted.confidence ?? 0.7;
-  const needsReview = confidence < 0.6;
+  const lines = await extractTransactionsFromEmailText(combined);
 
-  await prisma.transaction.create({
-    data: {
-      userId,
-      amount: extracted.amount,
-      currency: extracted.currency,
-      occurredAt: parseOccurredAt(extracted.date),
-      merchant: extracted.merchant ?? undefined,
-      notes: extracted.notes ?? undefined,
-      source: "email",
-      rawSnippet: combined.slice(0, 4000),
-      externalId,
-      confidence,
-      needsReview,
-      categoryId,
-    },
-  });
-  return { created: true, duplicate: false };
+  let createdCount = 0;
+  let duplicateCount = 0;
+  const messageKey = preview.messageId;
+
+  for (let i = 0; i < lines.length; i++) {
+    const extracted = lines[i]!;
+    const externalId = lineExternalId(messageKey, extracted.referenceId, i);
+    const existing = await prisma.transaction.findUnique({
+      where: { externalId },
+    });
+    if (existing) {
+      duplicateCount += 1;
+      continue;
+    }
+
+    const categoryId = await resolveCategoryId(extracted.categorySlug);
+    const confidence = extracted.confidence ?? 0.7;
+    const needsReview = confidence < 0.6;
+
+    await prisma.transaction.create({
+      data: {
+        userId,
+        amount: extracted.amount,
+        currency: extracted.currency,
+        occurredAt: parseOccurredAt(extracted.date),
+        merchant: extracted.merchant ?? undefined,
+        notes: extracted.notes ?? undefined,
+        source: "email",
+        rawSnippet: combined.slice(0, 4000),
+        externalId,
+        confidence,
+        needsReview,
+        categoryId,
+      },
+    });
+    createdCount += 1;
+  }
+
+  return {
+    created: createdCount > 0,
+    duplicate: createdCount === 0 && duplicateCount >= lines.length,
+    createdCount,
+    duplicateCount,
+    lineCount: lines.length,
+  };
+}
+
+function lineExternalId(
+  messageId: string,
+  referenceId: string | null | undefined,
+  index: number,
+): string {
+  const base = `email:${messageId}`;
+  const ref = referenceId?.trim();
+  if (ref) {
+    const safe = ref.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 100);
+    return `${base}:${safe}`;
+  }
+  return `${base}:line-${index}`;
 }
 
 function decodeBase64Url(input: string): string {
@@ -205,7 +238,7 @@ export async function syncGmailMessagesForUser(userId: string): Promise<{
     for (const p of previews) {
       try {
         const result = await parseAndStoreGmailMessage(userId, p);
-        if (result.created) created += 1;
+        if (result.createdCount > 0) created += result.createdCount;
         else skipped += 1;
       } catch (e) {
         errors.push(e instanceof Error ? e.message : String(e));

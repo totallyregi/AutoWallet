@@ -17,3 +17,19 @@ export const extractedTransactionSchema = z.object({
 });
 
 export type ExtractedTransaction = z.infer<typeof extractedTransactionSchema>;
+
+/** One line from a multi-transaction bank email (e.g. YouTrip summary). */
+export const extractedEmailLineSchema = extractedTransactionSchema.extend({
+  referenceId: z
+    .string()
+    .max(128)
+    .optional()
+    .nullable()
+    .describe("Bank reference e.g. SFT-1274491881 when present"),
+});
+
+export const multiExtractResponseSchema = z.object({
+  transactions: z.array(extractedEmailLineSchema).min(1).max(40),
+});
+
+export type ExtractedEmailLine = z.infer<typeof extractedEmailLineSchema>;
