@@ -15,6 +15,11 @@ export type GmailMessagePreview = {
   snippet: string;
 };
 
+/** Full plain-text body for dashboard preview (same extraction as parse). */
+export type GmailFullMessagePreview = GmailMessagePreview & {
+  bodyText: string;
+};
+
 type GmailPayload = {
   mimeType?: string | null;
   body?: { data?: string | null } | null;
@@ -149,6 +154,60 @@ export async function listGmailMessagesForUser(
   }
 
   return previews;
+}
+
+const FULL_BODY_MAX_CHARS = 120_000;
+
+/**
+ * Loads the full MIME payload and returns headers + best-effort plain text (HTML stripped).
+ */
+export async function getFullGmailMessagePreviewForUser(
+  userId: string,
+  gmailMessageId: string,
+): Promise<GmailFullMessagePreview> {
+  const gmail = await getGmailClientForUser(userId);
+  let full;
+  try {
+    full = await gmail.users.messages.get({
+      userId: "me",
+      id: gmailMessageId,
+      format: "full",
+    });
+  } catch (e) {
+    throw mapGmailApiError(e);
+  }
+
+  const id = full.data.id;
+  if (!id) {
+    throw new Error("Message not found");
+  }
+
+  const headers = full.data.payload?.headers ?? [];
+  const from =
+    headers.find((h) => h.name?.toLowerCase() === "from")?.value ?? "";
+  const subject =
+    headers.find((h) => h.name?.toLowerCase() === "subject")?.value ?? "";
+  const date =
+    headers.find((h) => h.name?.toLowerCase() === "date")?.value ?? "";
+  const messageId =
+    headers.find((h) => h.name?.toLowerCase() === "message-id")?.value ?? id;
+
+  let bodyText = extractTextFromPayload(full.data.payload as GmailPayload);
+  if (bodyText.length > FULL_BODY_MAX_CHARS) {
+    bodyText =
+      bodyText.slice(0, FULL_BODY_MAX_CHARS) +
+      "\n\n… (preview truncated for size)";
+  }
+
+  return {
+    gmailMessageId: id,
+    from,
+    subject,
+    date,
+    messageId,
+    snippet: full.data.snippet ?? "",
+    bodyText,
+  };
 }
 
 export async function parseAndStoreGmailMessage(

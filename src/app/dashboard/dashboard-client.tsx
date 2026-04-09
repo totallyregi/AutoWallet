@@ -1,5 +1,6 @@
 "use client";
 
+import type { GmailFullMessagePreview } from "@/lib/gmail-sync";
 import type { TransactionJson } from "@/lib/transaction-json";
 import { signIn } from "next-auth/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -88,6 +89,56 @@ export function DashboardClient({
   const [gmailMessages, setGmailMessages] = useState<GmailMessagePreview[]>([]);
   const [parseBusyId, setParseBusyId] = useState<string | null>(null);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
+
+  type EmailPreviewState = {
+    row: GmailMessagePreview;
+    loading: boolean;
+    error: string | null;
+    detail: GmailFullMessagePreview | null;
+  };
+  const [emailPreview, setEmailPreview] = useState<EmailPreviewState | null>(
+    null,
+  );
+
+  function closeEmailPreview() {
+    setEmailPreview(null);
+  }
+
+  async function openEmailPreview(row: GmailMessagePreview) {
+    setEmailPreview({ row, loading: true, error: null, detail: null });
+    try {
+      const res = await fetch(
+        `/api/gmail/messages/${encodeURIComponent(row.gmailMessageId)}/preview`,
+      );
+      const data = (await res.json()) as {
+        error?: string;
+        bodyText?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? "Failed to load email");
+      setEmailPreview({
+        row,
+        loading: false,
+        error: null,
+        detail: data as GmailFullMessagePreview,
+      });
+    } catch (e) {
+      setEmailPreview({
+        row,
+        loading: false,
+        error: e instanceof Error ? e.message : "Failed to load email",
+        detail: null,
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!emailPreview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setEmailPreview(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [emailPreview]);
 
   const range = useMemo(() => {
     const p = PRESETS.find((x) => x.id === preset)!;
@@ -487,7 +538,7 @@ export function DashboardClient({
                   <div>
                     <h2 className="text-lg font-medium">Gmail messages preview</h2>
                     <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                      Review messages before parsing.
+                      Review messages before parsing. Click a row to open the full email text.
                     </p>
                   </div>
                   <button
@@ -590,7 +641,17 @@ export function DashboardClient({
                       gmailMessages.map((m) => (
                         <tr
                           key={m.gmailMessageId}
-                          className="border-b border-zinc-100 dark:border-zinc-800/80"
+                          tabIndex={0}
+                          role="button"
+                          aria-label={`Open email preview: ${m.subject || "No subject"}`}
+                          onClick={() => void openEmailPreview(m)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              void openEmailPreview(m);
+                            }
+                          }}
+                          className="cursor-pointer border-b border-zinc-100 transition-colors hover:bg-zinc-50 dark:border-zinc-800/80 dark:hover:bg-zinc-900/40"
                         >
                           <td className="max-w-[240px] truncate px-3 py-2">{m.from}</td>
                           <td className="max-w-[240px] truncate px-3 py-2">{m.subject}</td>
@@ -600,7 +661,11 @@ export function DashboardClient({
                           <td className="hidden max-w-[280px] truncate px-3 py-2 text-zinc-600 dark:text-zinc-400 2xl:table-cell">
                             {m.snippet || "—"}
                           </td>
-                          <td className="px-3 py-2 text-right">
+                          <td
+                            className="px-3 py-2 text-right"
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => e.stopPropagation()}
+                          >
                             {m.tracked ? (
                               <span className="inline-flex h-8 items-center rounded-md border border-emerald-300 bg-emerald-50 px-3 text-xs font-medium text-emerald-700 dark:border-emerald-700/60 dark:bg-emerald-900/20 dark:text-emerald-300">
                                 Tracked
@@ -623,6 +688,91 @@ export function DashboardClient({
                 </table>
               </div>
             </div>
+
+            {emailPreview && (
+              <div
+                className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 backdrop-blur-[1px] sm:items-center"
+                role="presentation"
+                onClick={closeEmailPreview}
+              >
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="email-preview-title"
+                  className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex shrink-0 items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+                    <div className="min-w-0 flex-1">
+                      <h3
+                        id="email-preview-title"
+                        className="text-lg font-semibold leading-snug text-zinc-900 dark:text-zinc-100"
+                      >
+                        {emailPreview.detail?.subject ||
+                          emailPreview.row.subject ||
+                          "(No subject)"}
+                      </h3>
+                      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                        <span className="block truncate">
+                          From:{" "}
+                          {emailPreview.detail?.from || emailPreview.row.from || "—"}
+                        </span>
+                        <span className="mt-0.5 block">
+                          Date:{" "}
+                          {emailPreview.detail?.date || emailPreview.row.date
+                            ? new Date(
+                                emailPreview.detail?.date || emailPreview.row.date,
+                              ).toLocaleString()
+                            : "—"}
+                        </span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={closeEmailPreview}
+                      className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                    {emailPreview.loading && (
+                      <p className="text-sm text-zinc-500">Loading full message…</p>
+                    )}
+                    {emailPreview.error && (
+                      <p className="text-sm text-red-600 dark:text-red-400" role="alert">
+                        {emailPreview.error}
+                      </p>
+                    )}
+                    {!emailPreview.loading &&
+                      !emailPreview.error &&
+                      emailPreview.detail && (
+                        <div className="space-y-4">
+                          {emailPreview.detail.snippet && (
+                            <div>
+                              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                Snippet
+                              </p>
+                              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                                {emailPreview.detail.snippet}
+                              </p>
+                            </div>
+                          )}
+                          <div>
+                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                              Body (plain text)
+                            </p>
+                            <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
+                              {emailPreview.detail.bodyText.trim() ||
+                                "No text body could be extracted (try HTML-only message)."}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         )}
 
