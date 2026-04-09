@@ -82,9 +82,9 @@ export function DashboardClient() {
     return { from: from.toISOString(), to: to.toISOString() };
   }, [preset]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { preserveMessage?: boolean }) => {
     setLoading(true);
-    setMessage(null);
+    if (!options?.preserveMessage) setMessage(null);
     try {
       const q = `from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`;
       const [tRes, sRes] = await Promise.all([
@@ -251,13 +251,23 @@ export function DashboardClient() {
         error?: string;
       };
       if (!res.ok) throw new Error(data.error ?? "Failed to parse email");
-      if (data.duplicate) setMessage("Email already parsed earlier.");
-      else if ((data.createdCount ?? 0) > 1) {
+      if (data.duplicate) {
+        setMessage("Email already parsed earlier.");
+      } else if ((data.createdCount ?? 0) > 1) {
         setMessage(
           `Parsed email: created ${data.createdCount} transactions (${data.lineCount ?? data.createdCount} lines detected).`,
         );
-      } else setMessage("Parsed email and created transaction.");
-      await load();
+      } else {
+        setMessage("Parsed email successfully. It is now tracked.");
+      }
+      // Instant UI feedback: mark the row as tracked before refetching.
+      setGmailMessages((prev) =>
+        prev.map((m) =>
+          m.gmailMessageId === gmailMessageId ? { ...m, tracked: true } : m,
+        ),
+      );
+      await load({ preserveMessage: true });
+      await loadGmailMessages();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to parse email");
     } finally {
