@@ -55,10 +55,20 @@ type GmailMessagePreview = {
   tracked?: boolean;
 };
 
+export type GmailConnectionState =
+  | "oauth_disabled"
+  | "not_linked"
+  | "needs_reconnect"
+  | "connected";
+
 export function DashboardClient({
   googleOAuthEnabled,
+  gmailConnection,
+  gmailDisplayEmail,
 }: {
   googleOAuthEnabled: boolean;
+  gmailConnection: GmailConnectionState;
+  gmailDisplayEmail: string | null;
 }) {
   const [activeTab, setActiveTab] = useState<(typeof TABS)[number]["id"]>(
     "overview",
@@ -440,28 +450,6 @@ export function DashboardClient({
 
         {activeTab === "gmail" && (
           <section className="fade-slide-in space-y-6">
-            {googleOAuthEnabled && (
-              <div className="rounded-2xl border border-sky-200 bg-sky-50/80 p-4 text-sm dark:border-sky-900/50 dark:bg-sky-950/30">
-                <p className="mb-3 text-zinc-700 dark:text-zinc-300">
-                  Gmail uses your Google sign-in token (stored securely)—not a manual Playground token. If you see{" "}
-                  <span className="font-mono text-xs">invalid_grant</span> or Gmail stopped working, reconnect once
-                  with the same Google account as your inbox.
-                </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    signIn(
-                      "google",
-                      { callbackUrl: "/dashboard" },
-                      { prompt: "consent", access_type: "offline" },
-                    )
-                  }
-                  className="h-9 rounded-lg bg-sky-600 px-4 text-sm font-medium text-white hover:bg-sky-700 dark:bg-sky-500 dark:hover:bg-sky-400"
-                >
-                  Reconnect Google (Gmail)
-                </button>
-              </div>
-            )}
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
               <h2 className="mb-3 text-lg font-medium">Gmail bank sender filter</h2>
               <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
@@ -494,21 +482,85 @@ export function DashboardClient({
             </div>
 
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-medium">Gmail messages preview</h2>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Review messages before parsing.
-                  </p>
+              <div className="mb-4 flex flex-col gap-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h2 className="text-lg font-medium">Gmail messages preview</h2>
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                      Review messages before parsing.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loadGmailMessages()}
+                    disabled={gmailLoading}
+                    className="h-9 shrink-0 rounded-lg border border-zinc-300 px-3 text-sm font-medium hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
+                  >
+                    {gmailLoading ? "Refreshing..." : "Refresh list"}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void loadGmailMessages()}
-                  disabled={gmailLoading}
-                  className="h-9 rounded-lg border border-zinc-300 px-3 text-sm font-medium hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
-                >
-                  {gmailLoading ? "Refreshing..." : "Refresh list"}
-                </button>
+
+                {googleOAuthEnabled && (
+                  <div className="flex flex-col gap-3 border-t border-zinc-200 pt-4 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800">
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                      {gmailConnection === "connected" && (
+                        <>
+                          <span className="font-medium text-emerald-700 dark:text-emerald-400">
+                            Gmail connected
+                          </span>
+                          {gmailDisplayEmail ? (
+                            <> · Inbox: {gmailDisplayEmail}</>
+                          ) : (
+                            <> · Using your linked Google account</>
+                          )}
+                        </>
+                      )}
+                      {gmailConnection === "needs_reconnect" && (
+                        <>
+                          <span className="font-medium text-amber-800 dark:text-amber-200/90">
+                            Gmail needs reconnect
+                          </span>
+                          {gmailDisplayEmail ? (
+                            <> · Signed in as {gmailDisplayEmail}; use the button to grant Gmail access.</>
+                          ) : (
+                            <> · Use the button to grant Gmail access.</>
+                          )}
+                        </>
+                      )}
+                      {gmailConnection === "not_linked" && (
+                        <>
+                          <span className="font-medium text-zinc-800 dark:text-zinc-200">
+                            Gmail not linked
+                          </span>
+                          {gmailDisplayEmail ? (
+                            <> · {gmailDisplayEmail} — sign in with Google or reconnect to link your inbox.</>
+                          ) : (
+                            <> · Sign in with Google or use Reconnect to link your inbox.</>
+                          )}
+                        </>
+                      )}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        signIn(
+                          "google",
+                          { callbackUrl: "/dashboard" },
+                          { prompt: "consent", access_type: "offline" },
+                        )
+                      }
+                      className="h-9 shrink-0 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                      Reconnect Google (Gmail)
+                    </button>
+                  </div>
+                )}
+
+                {!googleOAuthEnabled && (
+                  <p className="border-t border-zinc-200 pt-4 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                    Google sign-in is not configured on this deployment, so Gmail sync is unavailable.
+                  </p>
+                )}
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full table-auto text-left text-sm">
