@@ -1,9 +1,11 @@
 "use client";
 
-import type { GmailFullMessagePreview } from "@/lib/gmail-sync";
 import type { TransactionJson } from "@/lib/transaction-json";
-import { signIn } from "next-auth/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { GmailFilters } from "./gmail-filters";
+import { GmailMessagesPreview } from "./gmail-messages-preview";
+import type { GmailConnectionState, GmailTableRow } from "./gmail-types";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Cell,
   Pie,
@@ -28,6 +30,13 @@ const TABS = [
   { id: "capture", label: "Capture" },
   { id: "transactions", label: "Transactions" },
 ] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+function tabFromSearchParam(value: string | null): TabId {
+  if (value && TABS.some((t) => t.id === value)) return value as TabId;
+  return "overview";
+}
 
 const MONTH_OPTIONS = [
   { value: 1, label: "January" },
@@ -54,23 +63,9 @@ type Summary = {
   }[];
 };
 
-type GmailMessagePreview = {
-  gmailMessageId: string;
-  from: string;
-  subject: string;
-  date: string;
-  messageId: string;
-  snippet: string;
-  tracked?: boolean;
-};
+export type { GmailConnectionState };
 
-export type GmailConnectionState =
-  | "oauth_disabled"
-  | "not_linked"
-  | "needs_reconnect"
-  | "connected";
-
-export function DashboardClient({
+function DashboardClientImpl({
   googleOAuthEnabled,
   gmailConnection,
   gmailDisplayEmail,
@@ -79,9 +74,26 @@ export function DashboardClient({
   gmailConnection: GmailConnectionState;
   gmailDisplayEmail: string | null;
 }) {
-  const [activeTab, setActiveTab] = useState<(typeof TABS)[number]["id"]>(
-    "overview",
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const activeTab = useMemo(
+    () => tabFromSearchParam(searchParams.get("tab")),
+    [searchParams],
   );
+
+  const setActiveTab = useCallback(
+    (tab: TabId) => {
+      const next = new URLSearchParams(searchParams.toString());
+      if (tab === "overview") next.delete("tab");
+      else next.set("tab", tab);
+      const q = next.toString();
+      router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
+    },
+    [router, pathname, searchParams],
+  );
+
   const [spendYear, setSpendYear] = useState(() => new Date().getFullYear());
   const [spendMonth, setSpendMonth] = useState(() => new Date().getMonth() + 1);
   const [transactions, setTransactions] = useState<TransactionJson[]>([]);
@@ -93,66 +105,15 @@ export function DashboardClient({
   const [message, setMessage] = useState<string | null>(null);
   const [senderEmail, setSenderEmail] = useState("");
   const [senderBusy, setSenderBusy] = useState(false);
-  const [syncBusy, setSyncBusy] = useState(false);
   const [gmailLoading, setGmailLoading] = useState(false);
   const [gmailAfter, setGmailAfter] = useState("");
   const [gmailBefore, setGmailBefore] = useState("");
   const [gmailSearch, setGmailSearch] = useState("");
-  const [gmailPages, setGmailPages] = useState<GmailMessagePreview[][]>([]);
+  const [gmailPages, setGmailPages] = useState<GmailTableRow[][]>([]);
   const [gmailPageIndex, setGmailPageIndex] = useState(0);
   const [gmailNextToken, setGmailNextToken] = useState<string | null>(null);
   const [parseBusyId, setParseBusyId] = useState<string | null>(null);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
-
-  type EmailPreviewState = {
-    row: GmailMessagePreview;
-    loading: boolean;
-    error: string | null;
-    detail: GmailFullMessagePreview | null;
-  };
-  const [emailPreview, setEmailPreview] = useState<EmailPreviewState | null>(
-    null,
-  );
-
-  function closeEmailPreview() {
-    setEmailPreview(null);
-  }
-
-  async function openEmailPreview(row: GmailMessagePreview) {
-    setEmailPreview({ row, loading: true, error: null, detail: null });
-    try {
-      const res = await fetch(
-        `/api/gmail/messages/${encodeURIComponent(row.gmailMessageId)}/preview`,
-      );
-      const data = (await res.json()) as {
-        error?: string;
-        bodyText?: string;
-      };
-      if (!res.ok) throw new Error(data.error ?? "Failed to load email");
-      setEmailPreview({
-        row,
-        loading: false,
-        error: null,
-        detail: data as GmailFullMessagePreview,
-      });
-    } catch (e) {
-      setEmailPreview({
-        row,
-        loading: false,
-        error: e instanceof Error ? e.message : "Failed to load email",
-        detail: null,
-      });
-    }
-  }
-
-  useEffect(() => {
-    if (!emailPreview) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setEmailPreview(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [emailPreview]);
 
   const range = useMemo(() => {
     const from = new Date(spendYear, spendMonth - 1, 1, 0, 0, 0, 0);
@@ -174,7 +135,7 @@ export function DashboardClient({
       if (pageToken) p.set("pageToken", pageToken);
       const res = await fetch(`/api/gmail/messages?${p}`);
       const data = (await res.json()) as {
-        messages?: GmailMessagePreview[];
+        messages?: GmailTableRow[];
         nextPageToken?: string | null;
         error?: string;
       };
@@ -360,38 +321,13 @@ export function DashboardClient({
       setMessage(
         senderEmail.trim()
           ? `Saved sender filter: ${senderEmail.trim().toLowerCase()}`
-          : "Cleared sender filter. Sync will scan recent emails.",
+          : "Cleared sender filter. The list will use default lookback until you set a sender again.",
       );
       await loadGmailReset();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to save sender");
     } finally {
       setSenderBusy(false);
-    }
-  }
-
-  async function onSyncGmailNow() {
-    setSyncBusy(true);
-    setMessage(null);
-    try {
-      const res = await fetch("/api/gmail/sync", { method: "POST" });
-      const data = (await res.json()) as {
-        created?: number;
-        skipped?: number;
-        errors?: string[];
-        error?: string;
-      };
-      if (!res.ok) throw new Error(data.error ?? "Gmail sync failed");
-      const errCount = data.errors?.length ?? 0;
-      setMessage(
-        `Gmail sync complete. Created ${data.created ?? 0}, skipped ${data.skipped ?? 0}, errors ${errCount}.`,
-      );
-      await load();
-      await loadGmailReset();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Gmail sync failed");
-    } finally {
-      setSyncBusy(false);
     }
   }
 
@@ -623,345 +559,40 @@ export function DashboardClient({
         )}
 
         {activeTab === "gmail" && (
-          <section className="fade-slide-in space-y-6">
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <h2 className="mb-3 text-lg font-medium">Gmail bank sender filter</h2>
-              <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
-                Enter a sender email (for example, alerts@yourbank.com). Sync only processes recent messages from this sender.
-              </p>
-              <form onSubmit={onSaveSender} className="flex flex-col gap-3 sm:flex-row">
-                <input
-                  className="h-10 flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-                  placeholder="alerts@yourbank.com"
-                  type="email"
-                  value={senderEmail}
-                  onChange={(e) => setSenderEmail(e.target.value)}
-                />
-                <button
-                  type="submit"
-                  disabled={senderBusy}
-                  className="h-10 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
-                >
-                  {senderBusy ? "Saving..." : "Save sender"}
-                </button>
-                <button
-                  type="button"
-                  disabled={syncBusy}
-                  onClick={onSyncGmailNow}
-                  className="h-10 rounded-lg border border-zinc-300 px-4 text-sm font-medium hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
-                >
-                  {syncBusy ? "Syncing..." : "Sync Gmail now"}
-                </button>
-              </form>
-            </div>
-
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <div className="mb-4 flex flex-col gap-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h2 className="text-lg font-medium">Gmail messages preview</h2>
-                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                      Review messages before parsing. Click a row to open the full email text.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void loadGmailReset()}
-                    disabled={gmailLoading}
-                    className="h-9 shrink-0 rounded-lg border border-zinc-300 px-3 text-sm font-medium hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
-                  >
-                    {gmailLoading ? "Refreshing..." : "Refresh list"}
-                  </button>
-                </div>
-
-                <div className="flex flex-col gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800 sm:flex-row sm:flex-wrap sm:items-end">
-                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
-                    After (optional)
-                    <input
-                      type="date"
-                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-                      value={gmailAfter}
-                      onChange={(e) => setGmailAfter(e.target.value)}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
-                    Before (optional)
-                    <input
-                      type="date"
-                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-                      value={gmailBefore}
-                      onChange={(e) => setGmailBefore(e.target.value)}
-                    />
-                  </label>
-                  <label className="min-w-[160px] flex-1 flex flex-col gap-1 text-xs font-medium text-zinc-500">
-                    Search (Gmail query)
-                    <input
-                      className="h-9 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-                      placeholder="e.g. receipt OR alert"
-                      value={gmailSearch}
-                      onChange={(e) => setGmailSearch(e.target.value)}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => void loadGmailReset()}
-                    disabled={gmailLoading}
-                    className="h-9 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
-                  >
-                    Apply filters
-                  </button>
-                </div>
-
-                {googleOAuthEnabled && (
-                  <div className="flex flex-col gap-3 border-t border-zinc-200 pt-4 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800">
-                    <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                      {gmailConnection === "connected" && (
-                        <>
-                          <span className="font-medium text-emerald-700 dark:text-emerald-400">
-                            Gmail connected
-                          </span>
-                          {gmailDisplayEmail ? (
-                            <> · Inbox: {gmailDisplayEmail}</>
-                          ) : (
-                            <> · Using your linked Google account</>
-                          )}
-                        </>
-                      )}
-                      {gmailConnection === "needs_reconnect" && (
-                        <>
-                          <span className="font-medium text-amber-800 dark:text-amber-200/90">
-                            Gmail needs reconnect
-                          </span>
-                          {gmailDisplayEmail ? (
-                            <> · Signed in as {gmailDisplayEmail}; use the button to grant Gmail access.</>
-                          ) : (
-                            <> · Use the button to grant Gmail access.</>
-                          )}
-                        </>
-                      )}
-                      {gmailConnection === "not_linked" && (
-                        <>
-                          <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                            Gmail not linked
-                          </span>
-                          {gmailDisplayEmail ? (
-                            <> · {gmailDisplayEmail} — sign in with Google or reconnect to link your inbox.</>
-                          ) : (
-                            <> · Sign in with Google or use Reconnect to link your inbox.</>
-                          )}
-                        </>
-                      )}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        signIn(
-                          "google",
-                          { callbackUrl: "/dashboard" },
-                          { prompt: "consent", access_type: "offline" },
-                        )
-                      }
-                      className="h-9 shrink-0 rounded-lg border border-zinc-300 bg-white px-3 text-sm font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
-                    >
-                      Reconnect Google (Gmail)
-                    </button>
-                  </div>
-                )}
-
-                {!googleOAuthEnabled && (
-                  <p className="border-t border-zinc-200 pt-4 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-                    Google sign-in is not configured on this deployment, so Gmail sync is unavailable.
-                  </p>
-                )}
-
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-                  <p className="text-xs text-zinc-500">
-                    {gmailPages.length > 0
-                      ? `Page ${gmailPageIndex + 1} of ${gmailPages.length}${
-                          gmailNextToken ? "+" : ""
-                        }`
-                      : null}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={goGmailPrev}
-                      disabled={gmailLoading || gmailPageIndex <= 0}
-                      className="h-9 rounded-lg border border-zinc-300 px-3 text-sm font-medium hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
-                    >
-                      Previous
-                    </button>
-                    <button
-                      type="button"
-                      onClick={goGmailNext}
-                      disabled={gmailLoading || !gmailCanGoNext}
-                      className="h-9 rounded-lg border border-zinc-300 px-3 text-sm font-medium hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full table-auto text-left text-sm">
-                  <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40">
-                    <tr>
-                      <th className="w-[28%] px-3 py-2">From</th>
-                      <th className="w-[28%] px-3 py-2">Subject</th>
-                      <th className="w-[20%] px-3 py-2">Date</th>
-                      <th className="hidden px-3 py-2 2xl:table-cell">Snippet</th>
-                      <th className="w-[130px] px-3 py-2 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {gmailLoading ? (
-                      <tr>
-                        <td colSpan={5} className="px-3 py-4 text-center text-zinc-500">
-                          Loading Gmail messages...
-                        </td>
-                      </tr>
-                    ) : gmailRows.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="px-3 py-4 text-center text-zinc-500">
-                          No Gmail messages matched your filters (sender, dates, and search).
-                        </td>
-                      </tr>
-                    ) : (
-                      gmailRows.map((m) => (
-                        <tr
-                          key={m.gmailMessageId}
-                          tabIndex={0}
-                          role="button"
-                          aria-label={`Open email preview: ${m.subject || "No subject"}`}
-                          onClick={() => void openEmailPreview(m)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              void openEmailPreview(m);
-                            }
-                          }}
-                          className="cursor-pointer border-b border-zinc-100 transition-colors hover:bg-zinc-50 dark:border-zinc-800/80 dark:hover:bg-zinc-900/40"
-                        >
-                          <td className="max-w-[240px] truncate px-3 py-2">{m.from}</td>
-                          <td className="max-w-[240px] truncate px-3 py-2">{m.subject}</td>
-                          <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400">
-                            {m.date ? new Date(m.date).toLocaleString() : "—"}
-                          </td>
-                          <td className="hidden max-w-[280px] truncate px-3 py-2 text-zinc-600 dark:text-zinc-400 2xl:table-cell">
-                            {m.snippet || "—"}
-                          </td>
-                          <td
-                            className="px-3 py-2 text-right"
-                            onClick={(e) => e.stopPropagation()}
-                            onKeyDown={(e) => e.stopPropagation()}
-                          >
-                            {m.tracked ? (
-                              <span className="inline-flex h-8 items-center rounded-md border border-emerald-300 bg-emerald-50 px-3 text-xs font-medium text-emerald-700 dark:border-emerald-700/60 dark:bg-emerald-900/20 dark:text-emerald-300">
-                                Tracked
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={parseBusyId === m.gmailMessageId}
-                                onClick={() => void onParseOne(m.gmailMessageId)}
-                                className="h-8 rounded-md bg-zinc-900 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
-                              >
-                                {parseBusyId === m.gmailMessageId ? "Parsing..." : "Parse"}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {emailPreview && (
-              <div
-                className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 backdrop-blur-[1px] sm:items-center"
-                role="presentation"
-                onClick={closeEmailPreview}
-              >
-                <div
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby="email-preview-title"
-                  className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="flex shrink-0 items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
-                    <div className="min-w-0 flex-1">
-                      <h3
-                        id="email-preview-title"
-                        className="text-lg font-semibold leading-snug text-zinc-900 dark:text-zinc-100"
-                      >
-                        {emailPreview.detail?.subject ||
-                          emailPreview.row.subject ||
-                          "(No subject)"}
-                      </h3>
-                      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                        <span className="block truncate">
-                          From:{" "}
-                          {emailPreview.detail?.from || emailPreview.row.from || "—"}
-                        </span>
-                        <span className="mt-0.5 block">
-                          Date:{" "}
-                          {emailPreview.detail?.date || emailPreview.row.date
-                            ? new Date(
-                                emailPreview.detail?.date || emailPreview.row.date,
-                              ).toLocaleString()
-                            : "—"}
-                        </span>
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={closeEmailPreview}
-                      className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                    >
-                      Close
-                    </button>
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-                    {emailPreview.loading && (
-                      <p className="text-sm text-zinc-500">Loading full message…</p>
-                    )}
-                    {emailPreview.error && (
-                      <p className="text-sm text-red-600 dark:text-red-400" role="alert">
-                        {emailPreview.error}
-                      </p>
-                    )}
-                    {!emailPreview.loading &&
-                      !emailPreview.error &&
-                      emailPreview.detail && (
-                        <div className="space-y-4">
-                          {emailPreview.detail.snippet && (
-                            <div>
-                              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                                Snippet
-                              </p>
-                              <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                                {emailPreview.detail.snippet}
-                              </p>
-                            </div>
-                          )}
-                          <div>
-                            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                              Body (plain text)
-                            </p>
-                            <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
-                              {emailPreview.detail.bodyText.trim() ||
-                                "No text body could be extracted (try HTML-only message)."}
-                            </pre>
-                          </div>
-                        </div>
-                      )}
-                  </div>
-                </div>
-              </div>
-            )}
+          <section className="fade-slide-in space-y-5">
+            <GmailFilters
+              senderEmail={senderEmail}
+              onSenderChange={setSenderEmail}
+              onSaveSender={onSaveSender}
+              senderBusy={senderBusy}
+              gmailAfter={gmailAfter}
+              onAfterChange={setGmailAfter}
+              gmailBefore={gmailBefore}
+              onBeforeChange={setGmailBefore}
+              gmailSearch={gmailSearch}
+              onSearchChange={setGmailSearch}
+              onApplyListFilters={() => void loadGmailReset()}
+              listLoading={gmailLoading}
+            />
+            <GmailMessagesPreview
+              googleOAuthEnabled={googleOAuthEnabled}
+              gmailConnection={gmailConnection}
+              gmailDisplayEmail={gmailDisplayEmail}
+              reconnectCallbackUrl={`${pathname}${
+                searchParams.toString() ? `?${searchParams.toString()}` : ""
+              }`}
+              gmailLoading={gmailLoading}
+              onRefresh={() => void loadGmailReset()}
+              rows={gmailRows}
+              gmailPagesLength={gmailPages.length}
+              gmailPageIndex={gmailPageIndex}
+              gmailNextToken={gmailNextToken}
+              gmailCanGoNext={gmailCanGoNext}
+              onPrevPage={goGmailPrev}
+              onNextPage={goGmailNext}
+              onParseOne={(id) => void onParseOne(id)}
+              parseBusyId={parseBusyId}
+            />
           </section>
         )}
 
@@ -1124,5 +755,23 @@ export function DashboardClient({
         )}
       </div>
     </div>
+  );
+}
+
+export function DashboardClient(props: {
+  googleOAuthEnabled: boolean;
+  gmailConnection: GmailConnectionState;
+  gmailDisplayEmail: string | null;
+}) {
+  return (
+    <Suspense
+      fallback={
+        <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-sm text-zinc-500 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          Loading dashboard…
+        </div>
+      }
+    >
+      <DashboardClientImpl {...props} />
+    </Suspense>
   );
 }
