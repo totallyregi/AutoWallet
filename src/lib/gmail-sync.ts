@@ -24,6 +24,7 @@ type GmailPayload = {
   mimeType?: string | null;
   body?: { data?: string | null } | null;
   parts?: GmailPayload[] | null;
+  headers?: { name?: string | null; value?: string | null }[] | null;
 };
 
 /**
@@ -95,23 +96,109 @@ async function getSenderQuery(userId: string) {
     select: { gmailSender: true },
   });
   const sender = user?.gmailSender?.trim();
-  return sender ? ` from:${sender}` : "";
+  return sender ? `from:${sender}` : "";
+}
+
+function metadataToPreview(
+  gmailMessageId: string,
+  snippet: string | null | undefined,
+  payload: GmailPayload | null | undefined,
+): GmailMessagePreview {
+  const headers = payload?.headers ?? [];
+  const from =
+    headers.find((h) => h.name?.toLowerCase() === "from")?.value ?? "";
+  const subject =
+    headers.find((h) => h.name?.toLowerCase() === "subject")?.value ?? "";
+  const date =
+    headers.find((h) => h.name?.toLowerCase() === "date")?.value ?? "";
+  const messageId =
+    headers.find((h) => h.name?.toLowerCase() === "message-id")?.value ??
+    gmailMessageId;
+  return {
+    gmailMessageId,
+    from,
+    subject,
+    date,
+    messageId,
+    snippet: snippet ?? "",
+  };
+}
+
+/** Optional filters for Gmail `messages.list` (combined with per-user sender). */
+export type ListGmailMessagesOptions = {
+  pageToken?: string;
+  /** ISO date YYYY-MM-DD */
+  after?: string;
+  /** ISO date YYYY-MM-DD (inclusive end; mapped to Gmail `before:` as next calendar day) */
+  before?: string;
+  /** Extra Gmail search terms (full-text / operators) */
+  search?: string;
+};
+
+function buildGmailListQuery(
+  senderQuery: string,
+  options: ListGmailMessagesOptions,
+): string {
+  const lookbackDays = Number(process.env.GMAIL_LOOKBACK_DAYS ?? "14");
+  const parts: string[] = [];
+
+  const after = options.after?.trim();
+  const before = options.before?.trim();
+  if (after) {
+    const [y, m, d] = after.split("-");
+    if (y && m && d) parts.push(`after:${y}/${m}/${d}`);
+  }
+  if (before) {
+    const [y, m, d] = before.split("-").map(Number);
+    if (
+      y != null &&
+      !Number.isNaN(y) &&
+      m != null &&
+      !Number.isNaN(m) &&
+      d != null &&
+      !Number.isNaN(d)
+    ) {
+      const end = new Date(Date.UTC(y, m - 1, d));
+      end.setUTCDate(end.getUTCDate() + 1);
+      const y2 = end.getUTCFullYear();
+      const m2 = String(end.getUTCMonth() + 1).padStart(2, "0");
+      const d2 = String(end.getUTCDate()).padStart(2, "0");
+      parts.push(`before:${y2}/${m2}/${d2}`);
+    }
+  }
+  if (!after && !before) {
+    parts.push(`newer_than:${lookbackDays}d`);
+  }
+
+  const search = options.search?.trim();
+  if (search) parts.push(search);
+
+  if (senderQuery) parts.push(senderQuery);
+
+  return parts.join(" ").trim();
 }
 
 export async function listGmailMessagesForUser(
   userId: string,
-): Promise<GmailMessagePreview[]> {
+  options: ListGmailMessagesOptions = {},
+): Promise<{ messages: GmailMessagePreview[]; nextPageToken?: string }> {
   const gmail = await getGmailClientForUser(userId);
   const senderQuery = await getSenderQuery(userId);
-  const maxResults = Number(process.env.GMAIL_MAX_RESULTS ?? "20");
-  const lookbackDays = Number(process.env.GMAIL_LOOKBACK_DAYS ?? "14");
+  const rawMax = Number(process.env.GMAIL_MAX_RESULTS ?? "25");
+  const maxResults = Math.min(
+    500,
+    Math.max(1, Number.isFinite(rawMax) ? rawMax : 25),
+  );
+
+  const q = buildGmailListQuery(senderQuery, options);
 
   let list;
   try {
     list = await gmail.users.messages.list({
       userId: "me",
       maxResults,
-      q: `newer_than:${lookbackDays}d${senderQuery}`,
+      pageToken: options.pageToken,
+      q,
     });
   } catch (e) {
     throw mapGmailApiError(e);
@@ -133,27 +220,55 @@ export async function listGmailMessagesForUser(
     } catch (e) {
       throw mapGmailApiError(e);
     }
-    const headers = full.data.payload?.headers ?? [];
-    const from =
-      headers.find((h) => h.name?.toLowerCase() === "from")?.value ?? "";
-    const subject =
-      headers.find((h) => h.name?.toLowerCase() === "subject")?.value ?? "";
-    const date =
-      headers.find((h) => h.name?.toLowerCase() === "date")?.value ?? "";
-    const messageId =
-      headers.find((h) => h.name?.toLowerCase() === "message-id")?.value ??
-      m.id;
-    previews.push({
-      gmailMessageId: m.id,
-      from,
-      subject,
-      date,
-      messageId,
-      snippet: full.data.snippet ?? "",
-    });
+    previews.push(
+      metadataToPreview(
+        m.id,
+        full.data.snippet,
+        full.data.payload as GmailPayload | null | undefined,
+      ),
+    );
   }
 
-  return previews;
+  const nextPageToken = list.data.nextPageToken ?? undefined;
+  return { messages: previews, nextPageToken };
+}
+
+/** Loads one message’s metadata as a preview (for parse without re-listing the inbox). */
+export async function getGmailMessagePreviewForUser(
+  userId: string,
+  gmailMessageId: string,
+): Promise<GmailMessagePreview | null> {
+  const gmail = await getGmailClientForUser(userId);
+  let full;
+  try {
+    full = await gmail.users.messages.get({
+      userId: "me",
+      id: gmailMessageId,
+      format: "metadata",
+      metadataHeaders: ["Subject", "Message-ID", "From", "Date"],
+    });
+  } catch (e: unknown) {
+    const status =
+      e &&
+      typeof e === "object" &&
+      "response" in e &&
+      e.response &&
+      typeof e.response === "object" &&
+      "status" in e.response
+        ? (e.response as { status?: number }).status
+        : undefined;
+    if (status === 404) return null;
+    const raw = e instanceof Error ? e.message : String(e);
+    if (raw.includes("404")) return null;
+    throw mapGmailApiError(e);
+  }
+  const id = full.data.id;
+  if (!id) return null;
+  return metadataToPreview(
+    id,
+    full.data.snippet,
+    full.data.payload as GmailPayload | null | undefined,
+  );
 }
 
 const FULL_BODY_MAX_CHARS = 120_000;
@@ -329,7 +444,7 @@ export async function syncGmailMessagesForUser(userId: string): Promise<{
   errors: string[];
 }> {
   try {
-    const previews = await listGmailMessagesForUser(userId);
+    const { messages: previews } = await listGmailMessagesForUser(userId);
     let created = 0;
     let skipped = 0;
     const errors: string[] = [];

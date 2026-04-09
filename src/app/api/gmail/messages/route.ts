@@ -1,18 +1,27 @@
 import { auth } from "@/auth";
 import { listGmailMessagesForUser } from "@/lib/gmail-sync";
 import prisma from "@/lib/prisma";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const sp = req.nextUrl.searchParams;
+  const pageToken = sp.get("pageToken")?.trim() || undefined;
+  const after = sp.get("after")?.trim() || undefined;
+  const before = sp.get("before")?.trim() || undefined;
+  const search = sp.get("search")?.trim() || undefined;
+
   try {
-    const messages = await listGmailMessagesForUser(session.user.id);
+    const { messages, nextPageToken } = await listGmailMessagesForUser(
+      session.user.id,
+      { pageToken, after, before, search },
+    );
     let existing: { externalId: string | null }[] = [];
     if (messages.length > 0) {
       existing = await prisma.transaction.findMany({
@@ -35,7 +44,10 @@ export async function GET() {
       );
       return { ...m, tracked };
     });
-    return NextResponse.json({ messages: enriched });
+    return NextResponse.json({
+      messages: enriched,
+      nextPageToken: nextPageToken ?? null,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },

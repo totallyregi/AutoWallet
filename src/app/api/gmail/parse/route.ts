@@ -1,6 +1,6 @@
 import { auth } from "@/auth";
 import {
-  listGmailMessagesForUser,
+  getGmailMessagePreviewForUser,
   parseAndStoreGmailMessage,
 } from "@/lib/gmail-sync";
 import { NextRequest, NextResponse } from "next/server";
@@ -25,13 +25,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const previews = await listGmailMessagesForUser(session.user.id);
-    const preview = previews.find(
-      (m) => m.gmailMessageId === parsed.data.gmailMessageId,
+    const preview = await getGmailMessagePreviewForUser(
+      session.user.id,
+      parsed.data.gmailMessageId,
     );
     if (!preview) {
       return NextResponse.json(
-        { error: "Message not found in current filtered inbox list" },
+        { error: "Message not found or inaccessible" },
         { status: 404 },
       );
     }

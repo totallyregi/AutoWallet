@@ -12,13 +12,6 @@ import {
   Tooltip,
 } from "recharts";
 
-const PRESETS = [
-  { id: "7d", label: "7 days", days: 7 },
-  { id: "30d", label: "30 days", days: 30 },
-  { id: "90d", label: "90 days", days: 90 },
-  { id: "365d", label: "1 year", days: 365 },
-] as const;
-
 const COLORS = [
   "#0ea5e9",
   "#8b5cf6",
@@ -34,6 +27,21 @@ const TABS = [
   { id: "gmail", label: "Gmail" },
   { id: "capture", label: "Capture" },
   { id: "transactions", label: "Transactions" },
+] as const;
+
+const MONTH_OPTIONS = [
+  { value: 1, label: "January" },
+  { value: 2, label: "February" },
+  { value: 3, label: "March" },
+  { value: 4, label: "April" },
+  { value: 5, label: "May" },
+  { value: 6, label: "June" },
+  { value: 7, label: "July" },
+  { value: 8, label: "August" },
+  { value: 9, label: "September" },
+  { value: 10, label: "October" },
+  { value: 11, label: "November" },
+  { value: 12, label: "December" },
 ] as const;
 
 type Summary = {
@@ -74,7 +82,8 @@ export function DashboardClient({
   const [activeTab, setActiveTab] = useState<(typeof TABS)[number]["id"]>(
     "overview",
   );
-  const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("30d");
+  const [spendYear, setSpendYear] = useState(() => new Date().getFullYear());
+  const [spendMonth, setSpendMonth] = useState(() => new Date().getMonth() + 1);
   const [transactions, setTransactions] = useState<TransactionJson[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,7 +95,12 @@ export function DashboardClient({
   const [senderBusy, setSenderBusy] = useState(false);
   const [syncBusy, setSyncBusy] = useState(false);
   const [gmailLoading, setGmailLoading] = useState(false);
-  const [gmailMessages, setGmailMessages] = useState<GmailMessagePreview[]>([]);
+  const [gmailAfter, setGmailAfter] = useState("");
+  const [gmailBefore, setGmailBefore] = useState("");
+  const [gmailSearch, setGmailSearch] = useState("");
+  const [gmailPages, setGmailPages] = useState<GmailMessagePreview[][]>([]);
+  const [gmailPageIndex, setGmailPageIndex] = useState(0);
+  const [gmailNextToken, setGmailNextToken] = useState<string | null>(null);
   const [parseBusyId, setParseBusyId] = useState<string | null>(null);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
 
@@ -141,12 +155,95 @@ export function DashboardClient({
   }, [emailPreview]);
 
   const range = useMemo(() => {
-    const p = PRESETS.find((x) => x.id === preset)!;
-    const to = new Date();
-    const from = new Date(to);
-    from.setDate(from.getDate() - p.days);
+    const from = new Date(spendYear, spendMonth - 1, 1, 0, 0, 0, 0);
+    const to = new Date(spendYear, spendMonth, 0, 23, 59, 59, 999);
     return { from: from.toISOString(), to: to.toISOString() };
-  }, [preset]);
+  }, [spendYear, spendMonth]);
+
+  const gmailRows = gmailPages[gmailPageIndex] ?? [];
+
+  const fetchGmailMessagesPage = useCallback(
+    async (
+      pageToken: string | null,
+      opts: { after: string; before: string; search: string },
+    ) => {
+      const p = new URLSearchParams();
+      if (opts.after) p.set("after", opts.after);
+      if (opts.before) p.set("before", opts.before);
+      if (opts.search.trim()) p.set("search", opts.search.trim());
+      if (pageToken) p.set("pageToken", pageToken);
+      const res = await fetch(`/api/gmail/messages?${p}`);
+      const data = (await res.json()) as {
+        messages?: GmailMessagePreview[];
+        nextPageToken?: string | null;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? "Failed to load Gmail");
+      return {
+        messages: data.messages ?? [],
+        nextPageToken: data.nextPageToken ?? null,
+      };
+    },
+    [],
+  );
+
+  const loadGmailReset = useCallback(async () => {
+    setGmailLoading(true);
+    try {
+      const { messages, nextPageToken } = await fetchGmailMessagesPage(null, {
+        after: gmailAfter,
+        before: gmailBefore,
+        search: gmailSearch,
+      });
+      setGmailPages([messages]);
+      setGmailPageIndex(0);
+      setGmailNextToken(nextPageToken);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Failed to load Gmail");
+    } finally {
+      setGmailLoading(false);
+    }
+  }, [gmailAfter, gmailBefore, gmailSearch, fetchGmailMessagesPage]);
+
+  const fetchAndAppendGmailPage = useCallback(async () => {
+    if (!gmailNextToken) return;
+    setGmailLoading(true);
+    try {
+      const { messages, nextPageToken } = await fetchGmailMessagesPage(
+        gmailNextToken,
+        { after: gmailAfter, before: gmailBefore, search: gmailSearch },
+      );
+      setGmailPages((prev) => [...prev, messages]);
+      setGmailPageIndex((i) => i + 1);
+      setGmailNextToken(nextPageToken);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Failed to load Gmail");
+    } finally {
+      setGmailLoading(false);
+    }
+  }, [
+    gmailNextToken,
+    gmailAfter,
+    gmailBefore,
+    gmailSearch,
+    fetchGmailMessagesPage,
+  ]);
+
+  function goGmailNext() {
+    if (gmailPageIndex < gmailPages.length - 1) {
+      setGmailPageIndex((i) => i + 1);
+      return;
+    }
+    void fetchAndAppendGmailPage();
+  }
+
+  function goGmailPrev() {
+    setGmailPageIndex((i) => Math.max(0, i - 1));
+  }
+
+  const gmailCanGoNext =
+    gmailPageIndex < gmailPages.length - 1 ||
+    (gmailPageIndex === gmailPages.length - 1 && Boolean(gmailNextToken));
 
   const load = useCallback(async (options?: { preserveMessage?: boolean }) => {
     setLoading(true);
@@ -177,32 +274,30 @@ export function DashboardClient({
     void (async () => {
       try {
         const res = await fetch("/api/gmail/sender");
-        if (!res.ok) return;
-        const data = (await res.json()) as { sender?: string };
-        setSenderEmail(data.sender ?? "");
-        await loadGmailMessages();
+        if (res.ok) {
+          const data = (await res.json()) as { sender?: string };
+          setSenderEmail(data.sender ?? "");
+        }
       } catch {
         // Ignore settings fetch errors; user can still use app.
       }
+      setGmailLoading(true);
+      try {
+        const { messages, nextPageToken } = await fetchGmailMessagesPage(null, {
+          after: "",
+          before: "",
+          search: "",
+        });
+        setGmailPages([messages]);
+        setGmailPageIndex(0);
+        setGmailNextToken(nextPageToken);
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Failed to load Gmail");
+      } finally {
+        setGmailLoading(false);
+      }
     })();
-  }, []);
-
-  async function loadGmailMessages() {
-    setGmailLoading(true);
-    try {
-      const res = await fetch("/api/gmail/messages");
-      const data = (await res.json()) as {
-        messages?: GmailMessagePreview[];
-        error?: string;
-      };
-      if (!res.ok) throw new Error(data.error ?? "Failed to load Gmail");
-      setGmailMessages(data.messages ?? []);
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Failed to load Gmail");
-    } finally {
-      setGmailLoading(false);
-    }
-  }
+  }, [fetchGmailMessagesPage]);
 
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -267,7 +362,7 @@ export function DashboardClient({
           ? `Saved sender filter: ${senderEmail.trim().toLowerCase()}`
           : "Cleared sender filter. Sync will scan recent emails.",
       );
-      await loadGmailMessages();
+      await loadGmailReset();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to save sender");
     } finally {
@@ -292,7 +387,7 @@ export function DashboardClient({
         `Gmail sync complete. Created ${data.created ?? 0}, skipped ${data.skipped ?? 0}, errors ${errCount}.`,
       );
       await load();
-      await loadGmailMessages();
+      await loadGmailReset();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Gmail sync failed");
     } finally {
@@ -326,14 +421,19 @@ export function DashboardClient({
       } else {
         setMessage("Parsed email successfully. It is now tracked.");
       }
-      // Instant UI feedback: mark the row as tracked before refetching.
-      setGmailMessages((prev) =>
-        prev.map((m) =>
-          m.gmailMessageId === gmailMessageId ? { ...m, tracked: true } : m,
+      setGmailPages((pages) =>
+        pages.map((pg) =>
+          pg.some((m) => m.gmailMessageId === gmailMessageId)
+            ? pg.map((m) =>
+                m.gmailMessageId === gmailMessageId
+                  ? { ...m, tracked: true }
+                  : m,
+              )
+            : pg,
         ),
       );
       await load({ preserveMessage: true });
-      await loadGmailMessages();
+      await loadGmailReset();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to parse email");
     } finally {
@@ -354,7 +454,7 @@ export function DashboardClient({
       if (!res.ok) throw new Error(data.error ?? "Failed to delete transaction");
       setMessage("Transaction deleted.");
       await load();
-      await loadGmailMessages();
+      await loadGmailReset();
     } catch (err) {
       setMessage(
         err instanceof Error ? err.message : "Failed to delete transaction",
@@ -370,55 +470,99 @@ export function DashboardClient({
       value: b.amount,
     })) ?? [];
 
-  return (
-    <div className="grid gap-6 xl:grid-cols-[250px_minmax(0,1fr)]">
-      <aside className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 xl:sticky xl:top-6 xl:h-fit">
-        <p className="px-3 pb-3 pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-          Workspace
-        </p>
-        <nav className="grid gap-1">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`rounded-xl px-3 py-2 text-left text-sm font-medium transition-all duration-200 ${
-                activeTab === tab.id
-                  ? "bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900"
-                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      </aside>
+  const tabButtonClass = (tabId: (typeof TABS)[number]["id"]) =>
+    `rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200 ${
+      activeTab === tabId
+        ? "bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900"
+        : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+    }`;
 
-      <div className="space-y-6">
-        <header className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Organized views for Gmail sync, capture, and spending analytics.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {PRESETS.map((p) => (
+  return (
+    <div
+      className={`grid gap-6 ${
+        activeTab === "overview" ? "xl:grid-cols-[250px_minmax(0,1fr)]" : ""
+      }`}
+    >
+      {activeTab === "overview" && (
+        <aside className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 xl:sticky xl:top-6 xl:h-fit">
+          <p className="px-3 pb-3 pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Workspace
+          </p>
+          <nav className="grid gap-1">
+            {TABS.map((tab) => (
               <button
-                key={p.id}
+                key={tab.id}
                 type="button"
-                onClick={() => setPreset(p.id)}
-                className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
-                  preset === p.id
-                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-                }`}
+                onClick={() => setActiveTab(tab.id)}
+                className={`${tabButtonClass(tab.id)} text-left`}
               >
-                {p.label}
+                {tab.label}
               </button>
             ))}
-          </div>
-        </header>
+          </nav>
+        </aside>
+      )}
+
+      <div className="space-y-6">
+        {activeTab !== "overview" && (
+          <nav className="flex flex-wrap gap-2 rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={tabButtonClass(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        {activeTab === "overview" && (
+          <header className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                Spending totals and charts use the calendar month you select below.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                Month
+                <select
+                  className="h-10 min-w-[140px] rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                  value={spendMonth}
+                  onChange={(e) => setSpendMonth(Number(e.target.value))}
+                >
+                  {MONTH_OPTIONS.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                Year
+                <input
+                  type="number"
+                  min={2000}
+                  max={2100}
+                  className="h-10 w-24 rounded-lg border border-zinc-300 bg-white px-3 text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+                  value={spendYear}
+                  onChange={(e) =>
+                    setSpendYear(
+                      Math.min(
+                        2100,
+                        Math.max(2000, Number(e.target.value) || spendYear),
+                      ),
+                    )
+                  }
+                />
+              </label>
+            </div>
+          </header>
+        )}
 
         {message && (
           <p className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900/50">
@@ -543,11 +687,49 @@ export function DashboardClient({
                   </div>
                   <button
                     type="button"
-                    onClick={() => void loadGmailMessages()}
+                    onClick={() => void loadGmailReset()}
                     disabled={gmailLoading}
                     className="h-9 shrink-0 rounded-lg border border-zinc-300 px-3 text-sm font-medium hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
                   >
                     {gmailLoading ? "Refreshing..." : "Refresh list"}
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800 sm:flex-row sm:flex-wrap sm:items-end">
+                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                    After (optional)
+                    <input
+                      type="date"
+                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                      value={gmailAfter}
+                      onChange={(e) => setGmailAfter(e.target.value)}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                    Before (optional)
+                    <input
+                      type="date"
+                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                      value={gmailBefore}
+                      onChange={(e) => setGmailBefore(e.target.value)}
+                    />
+                  </label>
+                  <label className="min-w-[160px] flex-1 flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                    Search (Gmail query)
+                    <input
+                      className="h-9 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                      placeholder="e.g. receipt OR alert"
+                      value={gmailSearch}
+                      onChange={(e) => setGmailSearch(e.target.value)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void loadGmailReset()}
+                    disabled={gmailLoading}
+                    className="h-9 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
+                  >
+                    Apply filters
                   </button>
                 </div>
 
@@ -612,6 +794,34 @@ export function DashboardClient({
                     Google sign-in is not configured on this deployment, so Gmail sync is unavailable.
                   </p>
                 )}
+
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+                  <p className="text-xs text-zinc-500">
+                    {gmailPages.length > 0
+                      ? `Page ${gmailPageIndex + 1} of ${gmailPages.length}${
+                          gmailNextToken ? "+" : ""
+                        }`
+                      : null}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={goGmailPrev}
+                      disabled={gmailLoading || gmailPageIndex <= 0}
+                      className="h-9 rounded-lg border border-zinc-300 px-3 text-sm font-medium hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={goGmailNext}
+                      disabled={gmailLoading || !gmailCanGoNext}
+                      className="h-9 rounded-lg border border-zinc-300 px-3 text-sm font-medium hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full table-auto text-left text-sm">
@@ -631,14 +841,14 @@ export function DashboardClient({
                           Loading Gmail messages...
                         </td>
                       </tr>
-                    ) : gmailMessages.length === 0 ? (
+                    ) : gmailRows.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="px-3 py-4 text-center text-zinc-500">
-                          No Gmail messages matched your current sender filter.
+                          No Gmail messages matched your filters (sender, dates, and search).
                         </td>
                       </tr>
                     ) : (
-                      gmailMessages.map((m) => (
+                      gmailRows.map((m) => (
                         <tr
                           key={m.gmailMessageId}
                           tabIndex={0}
@@ -820,8 +1030,48 @@ export function DashboardClient({
 
         {activeTab === "transactions" && (
           <section className="fade-slide-in rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-            <div className="border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
-              <h2 className="text-lg font-medium">Transactions</h2>
+            <div className="flex flex-col gap-4 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-lg font-medium">Transactions</h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {new Date(range.from).toLocaleDateString()} —{" "}
+                  {new Date(range.to).toLocaleDateString()}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                  Month
+                  <select
+                    className="h-9 min-w-[130px] rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                    value={spendMonth}
+                    onChange={(e) => setSpendMonth(Number(e.target.value))}
+                  >
+                    {MONTH_OPTIONS.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                  Year
+                  <input
+                    type="number"
+                    min={2000}
+                    max={2100}
+                    className="h-9 w-20 rounded-lg border border-zinc-300 bg-white px-2 text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+                    value={spendYear}
+                    onChange={(e) =>
+                      setSpendYear(
+                        Math.min(
+                          2100,
+                          Math.max(2000, Number(e.target.value) || spendYear),
+                        ),
+                      )
+                    }
+                  />
+                </label>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-left text-sm">
