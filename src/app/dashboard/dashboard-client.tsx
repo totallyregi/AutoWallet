@@ -409,6 +409,7 @@ function DashboardClientImpl({
       duplicate?: boolean;
       createdCount?: number;
       lineCount?: number;
+      parseStatus?: "open" | "partial" | "complete";
       createdTransactions?: {
         merchant: string | null;
         amount: number;
@@ -436,12 +437,13 @@ function DashboardClientImpl({
       } else {
         setMessage("Parsed email successfully. It is now tracked.");
       }
+      const nextStatus = data.parseStatus ?? "complete";
       setGmailPages((pages) =>
         pages.map((pg) =>
           pg.some((m) => m.gmailMessageId === gmailMessageId)
             ? pg.map((m) =>
                 m.gmailMessageId === gmailMessageId
-                  ? { ...m, tracked: true }
+                  ? { ...m, parseStatus: nextStatus }
                   : m,
               )
             : pg,
@@ -513,12 +515,13 @@ function DashboardClientImpl({
           lineCount: data.lineCount ?? data.createdCount ?? 0,
           createdTransactions: data.createdTransactions ?? [],
         });
+        const nextStatus = data.parseStatus ?? "complete";
         setGmailPages((pages) =>
           pages.map((pg) =>
             pg.some((m) => m.gmailMessageId === row.gmailMessageId)
               ? pg.map((m) =>
                   m.gmailMessageId === row.gmailMessageId
-                    ? { ...m, tracked: true }
+                    ? { ...m, parseStatus: nextStatus }
                     : m,
                 )
               : pg,
@@ -577,7 +580,7 @@ function DashboardClientImpl({
 
   async function onDeleteTransaction(id: string) {
     const ok = window.confirm(
-      "Delete this transaction? Its source email will become untracked and can be parsed again.",
+      "Delete this transaction? If it came from Gmail, the message may show Parse or Parse (Partially) so you can import again.",
     );
     if (!ok) return;
     setDeleteBusyId(id);

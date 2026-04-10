@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import { getParseStatusForMessageKey } from "@/lib/email-parse-snapshot";
 import {
   getGmailMessagePreviewForUser,
   parseAndStoreGmailMessage,
@@ -36,7 +37,11 @@ export async function POST(req: NextRequest) {
       );
     }
     const result = await parseAndStoreGmailMessage(session.user.id, preview);
-    return NextResponse.json(result);
+    const parseStatus = await getParseStatusForMessageKey(
+      session.user.id,
+      preview.messageId,
+    );
+    return NextResponse.json({ ...result, parseStatus });
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : String(e) },

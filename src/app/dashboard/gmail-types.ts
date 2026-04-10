@@ -4,7 +4,7 @@ export type GmailConnectionState =
   | "needs_reconnect"
   | "connected";
 
-/** Row shape for the Gmail messages table (matches API + optional tracked flag). */
+/** Row shape for the Gmail messages table (matches API). */
 export type GmailTableRow = {
   gmailMessageId: string;
   from: string;
@@ -12,5 +12,5 @@ export type GmailTableRow = {
   date: string;
   messageId: string;
   snippet: string;
-  tracked?: boolean;
+  parseStatus: "open" | "partial" | "complete";
 };

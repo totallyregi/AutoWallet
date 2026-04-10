@@ -352,7 +352,7 @@ export function GmailMessagesPreview({
                       onClick={(e) => e.stopPropagation()}
                       onKeyDown={(e) => e.stopPropagation()}
                     >
-                      {m.tracked ? (
+                      {m.parseStatus === "complete" ? (
                         <span className="inline-flex h-8 items-center rounded-md border border-emerald-300 bg-emerald-50 px-3 text-xs font-medium text-emerald-700 dark:border-emerald-700/60 dark:bg-emerald-900/20 dark:text-emerald-300">
                           Tracked
                         </span>
@@ -361,11 +361,17 @@ export function GmailMessagesPreview({
                           type="button"
                           disabled={parseBusyId === m.gmailMessageId}
                           onClick={() => onParseOne(m.gmailMessageId)}
-                          className="h-8 rounded-md bg-zinc-900 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
+                          className={
+                            m.parseStatus === "partial"
+                              ? "h-8 rounded-md border border-amber-400 bg-amber-50 px-3 text-xs font-medium text-amber-950 hover:bg-amber-100 disabled:opacity-60 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-100 dark:hover:bg-amber-900/50"
+                              : "h-8 rounded-md bg-zinc-900 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
+                          }
                         >
                           {parseBusyId === m.gmailMessageId
                             ? "Parsing…"
-                            : "Parse"}
+                            : m.parseStatus === "partial"
+                              ? "Parse (Partially)"
+                              : "Parse"}
                         </button>
                       )}
                     </td>

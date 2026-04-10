@@ -1,4 +1,5 @@
 import { auth } from "@/auth";
+import { onEmailLinkedTransactionDeleted } from "@/lib/email-parse-snapshot";
 import prisma from "@/lib/prisma";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -24,13 +25,16 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
   const { id } = await params;
   const tx = await prisma.transaction.findUnique({
     where: { id },
-    select: { id: true, userId: true },
+    select: { id: true, userId: true, externalId: true, source: true },
   });
   if (!tx || tx.userId !== session.user.id) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   await prisma.transaction.delete({ where: { id } });
+  if (tx.source === "email") {
+    await onEmailLinkedTransactionDeleted(session.user.id, tx.externalId);
+  }
   return NextResponse.json({ ok: true });
 }
 

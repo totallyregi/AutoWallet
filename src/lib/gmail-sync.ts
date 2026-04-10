@@ -1,4 +1,8 @@
 import { google } from "googleapis";
+import {
+  refreshEmailParseSnapshot,
+  normalizeRfcMessageId,
+} from "@/lib/email-parse-snapshot";
 import prisma from "@/lib/prisma";
 import {
   extractTransactionsFromEmailText,
@@ -117,9 +121,10 @@ function metadataToPreview(
     headers.find((h) => h.name?.toLowerCase() === "subject")?.value ?? "";
   const date =
     headers.find((h) => h.name?.toLowerCase() === "date")?.value ?? "";
-  const messageId =
+  const rawMessageId =
     headers.find((h) => h.name?.toLowerCase() === "message-id")?.value ??
     gmailMessageId;
+  const messageId = normalizeRfcMessageId(rawMessageId);
   return {
     gmailMessageId,
     from,
@@ -313,8 +318,9 @@ export async function getFullGmailMessagePreviewForUser(
     headers.find((h) => h.name?.toLowerCase() === "subject")?.value ?? "";
   const date =
     headers.find((h) => h.name?.toLowerCase() === "date")?.value ?? "";
-  const messageId =
+  const rawMessageId =
     headers.find((h) => h.name?.toLowerCase() === "message-id")?.value ?? id;
+  const messageId = normalizeRfcMessageId(rawMessageId);
 
   let { bodyText, bodyHtmlSanitized } = extractBodiesFromPayload(
     full.data.payload as GmailPayload,
@@ -370,7 +376,7 @@ export async function parseAndStoreGmailMessage(
     occurredAt: string;
     kind: "charge" | "reversal";
   }[] = [];
-  const messageKey = preview.messageId;
+  const messageKey = normalizeRfcMessageId(preview.messageId);
 
   for (let i = 0; i < lines.length; i++) {
     const extracted = lines[i]!;
@@ -494,6 +500,8 @@ export async function parseAndStoreGmailMessage(
       kind: "charge",
     });
   }
+
+  await refreshEmailParseSnapshot(userId, messageKey);
 
   return {
     created: createdCount > 0,
