@@ -1,9 +1,11 @@
 "use client";
 
 import type { TransactionJson } from "@/lib/transaction-json";
+import { GmailBatchParseModal, type BatchParseResultRow } from "./gmail-batch-parse-modal";
 import { GmailFilters } from "./gmail-filters";
 import { GmailMessagesPreview } from "./gmail-messages-preview";
 import type { GmailConnectionState, GmailTableRow } from "./gmail-types";
+import { TransactionEditModal, type CategoryOption } from "./transaction-edit-modal";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -116,7 +118,21 @@ function DashboardClientImpl({
   const [gmailPageIndex, setGmailPageIndex] = useState(0);
   const [gmailNextToken, setGmailNextToken] = useState<string | null>(null);
   const [parseBusyId, setParseBusyId] = useState<string | null>(null);
+  const [selectedMessages, setSelectedMessages] = useState<
+    Record<string, GmailTableRow>
+  >({});
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchDone, setBatchDone] = useState(0);
+  const [batchTotal, setBatchTotal] = useState(0);
+  const [batchCurrentLabel, setBatchCurrentLabel] = useState<string>("");
+  const [batchResults, setBatchResults] = useState<BatchParseResultRow[]>([]);
+  const [forceOpenEmailId, setForceOpenEmailId] = useState<string | null>(null);
+  const [editTx, setEditTx] = useState<TransactionJson | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
+  const MAX_BATCH_SELECTION = 10;
 
   const range = useMemo(() => {
     const from = new Date(spendYear, spendMonth - 1, 1, 0, 0, 0, 0);
@@ -125,6 +141,14 @@ function DashboardClientImpl({
   }, [spendYear, spendMonth]);
 
   const gmailRows = gmailPages[gmailPageIndex] ?? [];
+  const selectedMessageIds = useMemo(
+    () => Object.keys(selectedMessages),
+    [selectedMessages],
+  );
+  const selectedRows = useMemo(
+    () => Object.values(selectedMessages),
+    [selectedMessages],
+  );
 
   const fetchGmailMessagesPage = useCallback(
     async (
@@ -233,6 +257,19 @@ function DashboardClientImpl({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/categories");
+        if (!res.ok) return;
+        const data = (await res.json()) as { categories?: CategoryOption[] };
+        setCategories(data.categories ?? []);
+      } catch {
+        // ignore category prefetch failures
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -361,23 +398,35 @@ function DashboardClientImpl({
     }
   }
 
+  async function parseEmailById(gmailMessageId: string) {
+    const res = await fetch("/api/gmail/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gmailMessageId }),
+    });
+    const data = (await res.json()) as {
+      created?: boolean;
+      duplicate?: boolean;
+      createdCount?: number;
+      lineCount?: number;
+      createdTransactions?: {
+        merchant: string | null;
+        amount: number;
+        currency: string;
+        occurredAt: string;
+        kind: "charge" | "reversal";
+      }[];
+      error?: string;
+    };
+    if (!res.ok) throw new Error(data.error ?? "Failed to parse email");
+    return data;
+  }
+
   async function onParseOne(gmailMessageId: string) {
     setParseBusyId(gmailMessageId);
     setMessage(null);
     try {
-      const res = await fetch("/api/gmail/parse", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gmailMessageId }),
-      });
-      const data = (await res.json()) as {
-        created?: boolean;
-        duplicate?: boolean;
-        createdCount?: number;
-        lineCount?: number;
-        error?: string;
-      };
-      if (!res.ok) throw new Error(data.error ?? "Failed to parse email");
+      const data = await parseEmailById(gmailMessageId);
       if (data.duplicate) {
         setMessage("Email already parsed earlier.");
       } else if ((data.createdCount ?? 0) > 1) {
@@ -403,6 +452,126 @@ function DashboardClientImpl({
       setMessage(err instanceof Error ? err.message : "Failed to parse email");
     } finally {
       setParseBusyId(null);
+    }
+  }
+
+  function onToggleSelected(row: GmailTableRow, checked: boolean) {
+    setSelectedMessages((prev) => {
+      const next = { ...prev };
+      if (checked) {
+        if (next[row.gmailMessageId]) return prev;
+        if (Object.keys(next).length >= MAX_BATCH_SELECTION) return prev;
+        next[row.gmailMessageId] = row;
+        return next;
+      }
+      delete next[row.gmailMessageId];
+      return next;
+    });
+  }
+
+  function onToggleSelectPage(rows: GmailTableRow[], checked: boolean) {
+    setSelectedMessages((prev) => {
+      const next = { ...prev };
+      if (!checked) {
+        for (const r of rows) delete next[r.gmailMessageId];
+        return next;
+      }
+      for (const r of rows) {
+        if (Object.keys(next).length >= MAX_BATCH_SELECTION) break;
+        if (!next[r.gmailMessageId]) next[r.gmailMessageId] = r;
+      }
+      return next;
+    });
+  }
+
+  async function onParseSelected() {
+    if (selectedRows.length === 0) return;
+    const toParse = selectedRows.slice(0, MAX_BATCH_SELECTION);
+    setBatchModalOpen(true);
+    setBatchRunning(true);
+    setBatchDone(0);
+    setBatchTotal(toParse.length);
+    setBatchResults([]);
+    setBatchCurrentLabel("");
+    setMessage(null);
+
+    const results: BatchParseResultRow[] = [];
+    for (let i = 0; i < toParse.length; i++) {
+      const row = toParse[i]!;
+      setBatchCurrentLabel(row.subject || row.from || "Email");
+      try {
+        const data = await parseEmailById(row.gmailMessageId);
+        const status: BatchParseResultRow["status"] = data.duplicate
+          ? "duplicate"
+          : "parsed";
+        results.push({
+          gmailMessageId: row.gmailMessageId,
+          subject: row.subject,
+          from: row.from,
+          status,
+          createdCount: data.createdCount ?? 0,
+          lineCount: data.lineCount ?? data.createdCount ?? 0,
+          createdTransactions: data.createdTransactions ?? [],
+        });
+        setGmailPages((pages) =>
+          pages.map((pg) =>
+            pg.some((m) => m.gmailMessageId === row.gmailMessageId)
+              ? pg.map((m) =>
+                  m.gmailMessageId === row.gmailMessageId
+                    ? { ...m, tracked: true }
+                    : m,
+                )
+              : pg,
+          ),
+        );
+      } catch (e) {
+        results.push({
+          gmailMessageId: row.gmailMessageId,
+          subject: row.subject,
+          from: row.from,
+          status: "error",
+          error: e instanceof Error ? e.message : "Failed to parse",
+        });
+      } finally {
+        setBatchDone(i + 1);
+        setBatchResults([...results]);
+      }
+    }
+    setBatchRunning(false);
+    setBatchCurrentLabel("");
+    setSelectedMessages({});
+    await load({ preserveMessage: true });
+    const success = results.filter((r) => r.status !== "error").length;
+    setMessage(`Batch parse complete: ${success}/${results.length} succeeded.`);
+  }
+
+  async function onSaveTransactionEdit(payload: {
+    id: string;
+    amount: number;
+    currency: string;
+    occurredAt: string;
+    merchant: string | null;
+    notes: string | null;
+    categoryId: string | null;
+    needsReview: boolean;
+  }) {
+    setEditSaving(true);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/transactions/${encodeURIComponent(payload.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Failed to update transaction");
+      setEditTx(null);
+      setMessage("Transaction updated.");
+      await load({ preserveMessage: true });
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Failed to update transaction");
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -623,6 +792,14 @@ function DashboardClientImpl({
               onNextPage={goGmailNext}
               onParseOne={(id) => void onParseOne(id)}
               parseBusyId={parseBusyId}
+              selectedMessageIds={selectedMessageIds}
+              maxBatchSelection={MAX_BATCH_SELECTION}
+              onToggleSelected={onToggleSelected}
+              onToggleSelectPage={onToggleSelectPage}
+              onParseSelected={() => void onParseSelected()}
+              forceOpenEmailId={forceOpenEmailId}
+              onForceOpenConsumed={() => setForceOpenEmailId(null)}
+              allLoadedRows={gmailPages.flat()}
             />
           </section>
         )}
@@ -723,7 +900,7 @@ function DashboardClientImpl({
                     <th className="px-4 py-3">Category</th>
                     <th className="px-4 py-3">Source</th>
                     <th className="px-4 py-3 text-right">Amount</th>
-                    <th className="px-4 py-3 text-right">Action</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -769,6 +946,13 @@ function DashboardClientImpl({
                         <td className="px-4 py-3 text-right">
                           <button
                             type="button"
+                            onClick={() => setEditTx(tx)}
+                            className="mr-2 h-8 rounded-md border border-zinc-300 px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900/40"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
                             disabled={deleteBusyId === tx.id}
                             onClick={() => void onDeleteTransaction(tx.id)}
                             className="h-8 rounded-md border border-red-300 px-3 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800/60 dark:text-red-300 dark:hover:bg-red-900/20"
@@ -785,6 +969,33 @@ function DashboardClientImpl({
           </section>
         )}
       </div>
+      <GmailBatchParseModal
+        open={batchModalOpen}
+        running={batchRunning}
+        done={batchDone}
+        total={batchTotal}
+        currentLabel={batchCurrentLabel}
+        results={batchResults}
+        selectedRows={selectedRows}
+        onClose={() => {
+          if (!batchRunning) setBatchModalOpen(false);
+        }}
+        onOpenEmail={(gmailMessageId) => {
+          setBatchModalOpen(false);
+          setForceOpenEmailId(gmailMessageId);
+        }}
+      />
+      <TransactionEditModal
+        key={editTx?.id ?? "no-edit"}
+        open={Boolean(editTx)}
+        tx={editTx}
+        categories={categories}
+        saving={editSaving}
+        onClose={() => {
+          if (!editSaving) setEditTx(null);
+        }}
+        onSave={onSaveTransactionEdit}
+      />
     </div>
   );
 }

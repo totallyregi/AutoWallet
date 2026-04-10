@@ -18,6 +18,8 @@ export type GmailMessagePreview = {
 /** Full plain-text body for dashboard preview (same extraction as parse). */
 export type GmailFullMessagePreview = GmailMessagePreview & {
   bodyText: string;
+  /** Sanitized HTML to render email close to original layout. */
+  bodyHtmlSanitized?: string;
 };
 
 type GmailPayload = {
@@ -314,11 +316,16 @@ export async function getFullGmailMessagePreviewForUser(
   const messageId =
     headers.find((h) => h.name?.toLowerCase() === "message-id")?.value ?? id;
 
-  let bodyText = extractTextFromPayload(full.data.payload as GmailPayload);
+  let { bodyText, bodyHtmlSanitized } = extractBodiesFromPayload(
+    full.data.payload as GmailPayload,
+  );
   if (bodyText.length > FULL_BODY_MAX_CHARS) {
     bodyText =
       bodyText.slice(0, FULL_BODY_MAX_CHARS) +
       "\n\n… (preview truncated for size)";
+  }
+  if (bodyHtmlSanitized && bodyHtmlSanitized.length > FULL_BODY_MAX_CHARS * 2) {
+    bodyHtmlSanitized = bodyHtmlSanitized.slice(0, FULL_BODY_MAX_CHARS * 2);
   }
 
   return {
@@ -329,6 +336,7 @@ export async function getFullGmailMessagePreviewForUser(
     messageId,
     snippet: full.data.snippet ?? "",
     bodyText,
+    bodyHtmlSanitized,
   };
 }
 
@@ -355,6 +363,13 @@ export async function parseAndStoreGmailMessage(
 
   let createdCount = 0;
   let duplicateCount = 0;
+  const createdTransactions: {
+    merchant: string | null;
+    amount: number;
+    currency: string;
+    occurredAt: string;
+    kind: "charge" | "reversal";
+  }[] = [];
   const messageKey = preview.messageId;
 
   for (let i = 0; i < lines.length; i++) {
@@ -409,6 +424,13 @@ export async function parseAndStoreGmailMessage(
           });
         });
         createdCount += 1;
+        createdTransactions.push({
+          merchant: extracted.merchant ?? null,
+          amount: extracted.amount,
+          currency: extracted.currency,
+          occurredAt: parseOccurredAt(extracted.date).toISOString(),
+          kind: "reversal",
+        });
         continue;
       }
 
@@ -433,6 +455,13 @@ export async function parseAndStoreGmailMessage(
         },
       });
       createdCount += 1;
+      createdTransactions.push({
+        merchant: extracted.merchant ?? null,
+        amount: extracted.amount,
+        currency: extracted.currency,
+        occurredAt: parseOccurredAt(extracted.date).toISOString(),
+        kind: "reversal",
+      });
       continue;
     }
 
@@ -457,6 +486,13 @@ export async function parseAndStoreGmailMessage(
       },
     });
     createdCount += 1;
+    createdTransactions.push({
+      merchant: extracted.merchant ?? null,
+      amount: extracted.amount,
+      currency: extracted.currency,
+      occurredAt: parseOccurredAt(extracted.date).toISOString(),
+      kind: "charge",
+    });
   }
 
   return {
@@ -465,6 +501,7 @@ export async function parseAndStoreGmailMessage(
     createdCount,
     duplicateCount,
     lineCount: lines.length,
+    createdTransactions,
   };
 }
 
@@ -507,24 +544,74 @@ function decodeBase64Url(input: string): string {
   return Buffer.from(padded, "base64").toString("utf8");
 }
 
-function extractTextFromPayload(payload: GmailPayload | null | undefined): string {
-  if (!payload) return "";
-  const mime = payload.mimeType ?? "";
-  const data = payload.body?.data;
+function sanitizeEmailHtml(input: string): string {
+  let html = input;
+  html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+  html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+  html = html.replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, "");
+  html = html.replace(/<object[^>]*>[\s\S]*?<\/object>/gi, "");
+  html = html.replace(/<embed[^>]*>/gi, "");
+  html = html.replace(/<link[^>]*>/gi, "");
+  html = html.replace(/<meta[^>]*>/gi, "");
+  html = html.replace(/<base[^>]*>/gi, "");
+  html = html.replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  html = html.replace(
+    /\s(href|src)\s*=\s*"\s*javascript:[^"]*"/gi,
+    ' $1="#"',
+  );
+  html = html.replace(/\s(href|src)\s*=\s*'\s*javascript:[^']*'/gi, " $1='#'");
+  return html.trim();
+}
 
-  if (mime.startsWith("text/plain") && data) {
-    return decodeBase64Url(data);
-  }
-  if (mime.startsWith("text/html") && data) {
-    const html = decodeBase64Url(data);
-    return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-  }
-  for (const part of payload.parts ?? []) {
-    const nested = extractTextFromPayload(part);
-    if (nested.trim()) return nested;
-  }
-  if (data) return decodeBase64Url(data);
-  return "";
+function htmlToReadableText(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractBodiesFromPayload(
+  payload: GmailPayload | null | undefined,
+): { bodyText: string; bodyHtmlSanitized?: string } {
+  if (!payload) return { bodyText: "" };
+
+  const plainParts: string[] = [];
+  const htmlParts: string[] = [];
+
+  const walk = (node: GmailPayload | null | undefined) => {
+    if (!node) return;
+    const mime = (node.mimeType ?? "").toLowerCase();
+    const data = node.body?.data;
+    if (data) {
+      const decoded = decodeBase64Url(data);
+      if (mime.startsWith("text/plain")) {
+        plainParts.push(decoded);
+      } else if (mime.startsWith("text/html")) {
+        htmlParts.push(decoded);
+      }
+    }
+    for (const p of node.parts ?? []) walk(p);
+  };
+
+  walk(payload);
+
+  const mergedHtml = htmlParts.join("\n").trim();
+  const bodyHtmlSanitized = mergedHtml ? sanitizeEmailHtml(mergedHtml) : undefined;
+  const mergedPlain = plainParts.join("\n").trim();
+  const fallbackText = bodyHtmlSanitized ? htmlToReadableText(bodyHtmlSanitized) : "";
+
+  return {
+    bodyText: (mergedPlain || fallbackText).trim(),
+    bodyHtmlSanitized,
+  };
+}
+
+function extractTextFromPayload(payload: GmailPayload | null | undefined): string {
+  return extractBodiesFromPayload(payload).bodyText;
 }
 
 /**

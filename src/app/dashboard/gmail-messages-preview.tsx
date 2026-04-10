@@ -28,6 +28,14 @@ type GmailMessagesPreviewProps = {
   onNextPage: () => void;
   onParseOne: (gmailMessageId: string) => void;
   parseBusyId: string | null;
+  selectedMessageIds: string[];
+  maxBatchSelection: number;
+  onToggleSelected: (row: GmailTableRow, checked: boolean) => void;
+  onToggleSelectPage: (rows: GmailTableRow[], checked: boolean) => void;
+  onParseSelected: () => void;
+  forceOpenEmailId?: string | null;
+  onForceOpenConsumed?: () => void;
+  allLoadedRows?: GmailTableRow[];
 };
 
 export function GmailMessagesPreview({
@@ -46,10 +54,19 @@ export function GmailMessagesPreview({
   onNextPage,
   onParseOne,
   parseBusyId,
+  selectedMessageIds,
+  maxBatchSelection,
+  onToggleSelected,
+  onToggleSelectPage,
+  onParseSelected,
+  forceOpenEmailId,
+  onForceOpenConsumed,
+  allLoadedRows,
 }: GmailMessagesPreviewProps) {
   const [emailPreview, setEmailPreview] = useState<EmailPreviewState | null>(
     null,
   );
+  const [previewMode, setPreviewMode] = useState<"html" | "text">("html");
 
   const closeEmailPreview = useCallback(() => setEmailPreview(null), []);
 
@@ -70,6 +87,7 @@ export function GmailMessagesPreview({
         error: null,
         detail: data as GmailFullMessagePreview,
       });
+      setPreviewMode("html");
     } catch (e) {
       setEmailPreview({
         row,
@@ -88,6 +106,29 @@ export function GmailMessagesPreview({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [emailPreview]);
+
+  useEffect(() => {
+    if (!forceOpenEmailId) return;
+    const pool = allLoadedRows && allLoadedRows.length > 0 ? allLoadedRows : rows;
+    const row = pool.find((r) => r.gmailMessageId === forceOpenEmailId);
+    if (row) {
+      void openEmailPreview(row);
+      onForceOpenConsumed?.();
+    }
+  }, [
+    allLoadedRows,
+    forceOpenEmailId,
+    onForceOpenConsumed,
+    openEmailPreview,
+    rows,
+  ]);
+
+  const selectedOnPage = rows.filter((m) =>
+    selectedMessageIds.includes(m.gmailMessageId),
+  );
+  const allPageSelected = rows.length > 0 && selectedOnPage.length === rows.length;
+  const somePageSelected = selectedOnPage.length > 0 && !allPageSelected;
+  const atBatchLimit = selectedMessageIds.length >= maxBatchSelection;
 
   return (
     <>
@@ -183,13 +224,26 @@ export function GmailMessagesPreview({
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 px-5 py-3 dark:border-zinc-800 sm:px-6">
-          <p className="text-xs text-zinc-500">
-            {gmailPagesLength > 0
-              ? `Page ${gmailPageIndex + 1} of ${gmailPagesLength}${
-                  gmailNextToken ? "+" : ""
-                }`
-              : null}
-          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-xs text-zinc-500">
+              {gmailPagesLength > 0
+                ? `Page ${gmailPageIndex + 1} of ${gmailPagesLength}${
+                    gmailNextToken ? "+" : ""
+                  }`
+                : null}
+            </p>
+            <p className="text-xs text-zinc-500">
+              Selected: {selectedMessageIds.length}/{maxBatchSelection}
+            </p>
+            <button
+              type="button"
+              disabled={selectedMessageIds.length === 0}
+              onClick={onParseSelected}
+              className="h-8 rounded-md bg-zinc-900 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+            >
+              Parse selected
+            </button>
+          </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -214,6 +268,17 @@ export function GmailMessagesPreview({
           <table className="w-full table-auto text-left text-sm">
             <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40">
               <tr>
+                <th className="w-[42px] px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={allPageSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = somePageSelected;
+                    }}
+                    onChange={(e) => onToggleSelectPage(rows, e.target.checked)}
+                    aria-label="Select all messages on this page"
+                  />
+                </th>
                 <th className="w-[28%] px-3 py-2">From</th>
                 <th className="w-[28%] px-3 py-2">Subject</th>
                 <th className="w-[20%] px-3 py-2">Date</th>
@@ -225,7 +290,7 @@ export function GmailMessagesPreview({
               {gmailLoading ? (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={6}
                     className="px-3 py-8 text-center text-zinc-500"
                   >
                     Loading messages…
@@ -234,7 +299,7 @@ export function GmailMessagesPreview({
               ) : rows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={6}
                     className="px-3 py-8 text-center text-zinc-500"
                   >
                     No messages match your filters.
@@ -256,6 +321,22 @@ export function GmailMessagesPreview({
                     }}
                     className="cursor-pointer border-b border-zinc-100 transition-colors hover:bg-zinc-50 dark:border-zinc-800/80 dark:hover:bg-zinc-900/40"
                   >
+                    <td
+                      className="px-3 py-2"
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedMessageIds.includes(m.gmailMessageId)}
+                        disabled={
+                          !selectedMessageIds.includes(m.gmailMessageId) &&
+                          atBatchLimit
+                        }
+                        onChange={(e) => onToggleSelected(m, e.target.checked)}
+                        aria-label={`Select ${m.subject || "email"}`}
+                      />
+                    </td>
                     <td className="max-w-[240px] truncate px-3 py-2">{m.from}</td>
                     <td className="max-w-[240px] truncate px-3 py-2">
                       {m.subject}
@@ -360,6 +441,30 @@ export function GmailMessagesPreview({
                 !emailPreview.error &&
                 emailPreview.detail && (
                   <div className="space-y-4">
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewMode("html")}
+                        className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                          previewMode === "html"
+                            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                            : "border border-zinc-300 text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
+                        }`}
+                      >
+                        HTML view
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewMode("text")}
+                        className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                          previewMode === "text"
+                            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                            : "border border-zinc-300 text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
+                        }`}
+                      >
+                        Text view
+                      </button>
+                    </div>
                     {emailPreview.detail.snippet && (
                       <div>
                         <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -371,13 +476,30 @@ export function GmailMessagesPreview({
                       </div>
                     )}
                     <div>
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                        Body (plain text)
-                      </p>
-                      <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
-                        {emailPreview.detail.bodyText.trim() ||
-                          "No text body could be extracted (try HTML-only message)."}
-                      </pre>
+                      {previewMode === "html" &&
+                      emailPreview.detail.bodyHtmlSanitized ? (
+                        <div>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            Body (sanitized HTML)
+                          </p>
+                          <div
+                            className="prose prose-sm max-w-none overflow-x-auto rounded-md border border-zinc-200 p-3 dark:prose-invert dark:border-zinc-800"
+                            dangerouslySetInnerHTML={{
+                              __html: emailPreview.detail.bodyHtmlSanitized,
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            Body (plain text)
+                          </p>
+                          <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
+                            {emailPreview.detail.bodyText.trim() ||
+                              "No text body could be extracted (try HTML-only message)."}
+                          </pre>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
