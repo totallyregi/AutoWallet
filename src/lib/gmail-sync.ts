@@ -90,13 +90,17 @@ function mapGmailApiError(e: unknown): Error {
   return e instanceof Error ? e : new Error(raw);
 }
 
+/** Gmail `q` fragment: empty, single `from:`, or `(from:a OR from:b)`. */
 async function getSenderQuery(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { gmailSender: true },
+  const rows = await prisma.savedGmailSender.findMany({
+    where: { userId },
+    select: { email: true },
+    orderBy: { createdAt: "asc" },
   });
-  const sender = user?.gmailSender?.trim();
-  return sender ? `from:${sender}` : "";
+  const emails = rows.map((r) => r.email.trim().toLowerCase()).filter(Boolean);
+  if (emails.length === 0) return "";
+  if (emails.length === 1) return `from:${emails[0]}`;
+  return `(${emails.map((e) => `from:${e}`).join(" OR ")})`;
 }
 
 function metadataToPreview(
@@ -166,8 +170,11 @@ function buildGmailListQuery(
       parts.push(`before:${y2}/${m2}/${d2}`);
     }
   }
+  // With saved sender filter but no date window, search all mail from those senders (not just lookback).
   if (!after && !before) {
-    parts.push(`newer_than:${lookbackDays}d`);
+    if (!senderQuery) {
+      parts.push(`newer_than:${lookbackDays}d`);
+    }
   }
 
   const search = options.search?.trim();
@@ -361,6 +368,74 @@ export async function parseAndStoreGmailMessage(
       continue;
     }
 
+    const kind = extracted.entryKind ?? "charge";
+
+    if (kind === "reversal") {
+      const refForMatch =
+        extracted.reversesReferenceId?.trim() || extracted.referenceId?.trim();
+      const reversedCategoryId = await resolveCategoryId("reversed");
+      const confidence = extracted.confidence ?? 0.7;
+      const orig = await findChargeByBankReference(userId, refForMatch);
+
+      if (orig) {
+        await prisma.$transaction(async (db) => {
+          await db.transaction.update({
+            where: { id: orig.id },
+            data: {
+              excludedFromSpend: true,
+              notes: orig.notes
+                ? `${orig.notes} | Reversed (matched email reversal).`
+                : "Reversed (matched email reversal).",
+            },
+          });
+          await db.transaction.create({
+            data: {
+              userId,
+              amount: extracted.amount,
+              currency: extracted.currency,
+              occurredAt: parseOccurredAt(extracted.date),
+              merchant: extracted.merchant ?? undefined,
+              notes: extracted.notes ?? undefined,
+              source: "email",
+              rawSnippet: combined.slice(0, 4000),
+              externalId,
+              confidence,
+              needsReview: confidence < 0.6,
+              categoryId: reversedCategoryId,
+              excludedFromSpend: true,
+              isReversalLine: true,
+              reversesTransactionId: orig.id,
+            },
+          });
+        });
+        createdCount += 1;
+        continue;
+      }
+
+      await prisma.transaction.create({
+        data: {
+          userId,
+          amount: extracted.amount,
+          currency: extracted.currency,
+          occurredAt: parseOccurredAt(extracted.date),
+          merchant: extracted.merchant ?? undefined,
+          notes:
+            extracted.notes ??
+            "Reversal with no matching charge by bank reference — excluded from spend.",
+          source: "email",
+          rawSnippet: combined.slice(0, 4000),
+          externalId,
+          confidence,
+          needsReview: true,
+          categoryId: reversedCategoryId,
+          excludedFromSpend: true,
+          isReversalLine: true,
+        },
+      });
+      createdCount += 1;
+      continue;
+    }
+
     const categoryId = await resolveCategoryId(extracted.categorySlug);
     const confidence = extracted.confidence ?? 0.7;
     const needsReview = confidence < 0.6;
@@ -405,6 +480,24 @@ function lineExternalId(
     return `${base}:${safe}`;
   }
   return `${base}:line-${index}`;
+}
+
+async function findChargeByBankReference(
+  userId: string,
+  refRaw: string | null | undefined,
+) {
+  const ref = refRaw?.trim();
+  if (!ref) return null;
+  const safe = ref.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 100);
+  return prisma.transaction.findFirst({
+    where: {
+      userId,
+      isReversalLine: false,
+      excludedFromSpend: false,
+      externalId: { endsWith: `:${safe}` },
+    },
+    select: { id: true, notes: true },
+  });
 }
 
 function decodeBase64Url(input: string): string {

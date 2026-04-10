@@ -27,7 +27,7 @@ function getModel() {
 }
 
 function buildCategoryHint(): string {
-  return `Allowed category slugs (pick the closest, or "other"): groceries, food-dining, travel, transport, shopping, entertainment, bills-utilities, health, education, other`;
+  return `Allowed category slugs (pick the closest, or "other"): groceries, food-dining, travel, transport, shopping, entertainment, bills-utilities, health, education, reversed (only for unmatched reversal lines), other`;
 }
 
 const EXTRACTION_INSTRUCTION = `You extract ONE expense transaction from the user content. Respond with ONLY valid JSON, no markdown, no code fences.
@@ -46,10 +46,12 @@ const MULTI_EMAIL_INSTRUCTION = `You extract EVERY distinct charge/transaction l
 Each real spend line should become one object in the JSON array (e.g. each merchant + amount pair, often with a separate "Ref. No" / reference).
 Respond with ONLY valid JSON, no markdown, no code fences.
 Shape:
-{ "transactions": [ { "amount", "currency", "merchant", "date", "categorySlug", "notes", "confidence", "referenceId" } ] }
+{ "transactions": [ { "amount", "currency", "merchant", "date", "categorySlug", "notes", "confidence", "referenceId", "entryKind", "reversesReferenceId" } ] }
 Rules:
 - amount: positive number per line (not a running total unless only one total exists)
 - referenceId: copy bank reference if shown (e.g. SFT-1274491881), else null
+- entryKind: "charge" (default) for normal spends; "reversal" for refunds/credits/reversals that void a prior charge
+- reversesReferenceId: when entryKind is "reversal", set to the bank reference of the ORIGINAL charge being reversed (often matches that row's referenceId); else null
 - If the email has only one charge, return exactly one object in the array
 - categorySlug: one of the allowed slugs below
 - date: ISO 8601 best effort per line or email date
@@ -81,7 +83,14 @@ export async function extractTransactionsFromEmailText(
   if (regexLines.length > 0) return regexLines;
 
   const single = await extractTransactionFromText(text);
-  return [{ ...single, referenceId: null }];
+  return [
+    {
+      ...single,
+      referenceId: null,
+      entryKind: "charge" as const,
+      reversesReferenceId: null,
+    },
+  ];
 }
 
 function parseMultiFromModelRaw(
@@ -115,7 +124,15 @@ function parseMultiFromModelRaw(
   }
   const single = applyAmountFallback(rec, sourceText);
   const one = extractedTransactionSchema.safeParse(single);
-  if (one.success) return [{ ...one.data, referenceId: null }];
+  if (one.success)
+    return [
+      {
+        ...one.data,
+        referenceId: null,
+        entryKind: "charge" as const,
+        reversesReferenceId: null,
+      },
+    ];
   return [];
 }
 
@@ -160,6 +177,8 @@ function regexFallbackMultipleTransactions(text: string): ExtractedEmailLine[] {
       notes: "Parsed via reference + amount pattern (multi-line email).",
       confidence: 0.55,
       referenceId: refM[1],
+      entryKind: "charge",
+      reversesReferenceId: null,
     });
   }
 

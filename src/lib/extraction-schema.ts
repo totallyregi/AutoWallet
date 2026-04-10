@@ -26,6 +26,17 @@ export const extractedEmailLineSchema = extractedTransactionSchema.extend({
     .optional()
     .nullable()
     .describe("Bank reference e.g. SFT-1274491881 when present"),
+  entryKind: z
+    .enum(["charge", "reversal"])
+    .optional()
+    .default("charge")
+    .describe("reversal = credit/reversal that voids an earlier charge with the same bank reference"),
+  reversesReferenceId: z
+    .string()
+    .max(128)
+    .optional()
+    .nullable()
+    .describe("Reference of the original charge this line reverses (often same as referenceId on the original)"),
 });
 
 export const multiExtractResponseSchema = z.object({

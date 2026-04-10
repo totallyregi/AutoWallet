@@ -9,16 +9,16 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String?   @unique
-  emailVerified DateTime?
-  name          String?
-  image         String?
-  password      String?
-  gmailSender   String?
-  accounts      Account[]
-  sessions      Session[]
-  transactions  Transaction[]
+  id                 String             @id @default(cuid())
+  email              String?            @unique
+  emailVerified      DateTime?
+  name               String?
+  image              String?
+  password           String?
+  accounts           Account[]
+  sessions           Session[]
+  transactions       Transaction[]
+  savedGmailSenders  SavedGmailSender[]
 }
 
 model Account {
@@ -63,6 +63,17 @@ model Category {
   transactions Transaction[]
 }
 
+model SavedGmailSender {
+  id        String   @id @default(cuid())
+  userId    String
+  email     String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, email])
+  @@index([userId])
+}
+
 model Transaction {
   id          String            @id @default(cuid())
   userId      String
@@ -79,12 +90,22 @@ model Transaction {
   imageUrl    String?
   categoryId  String?
 
+  /** Omit from spend totals and default transaction list (reversals, voided pairs). */
+  excludedFromSpend Boolean @default(false)
+  /** Parsed from a reversal / credit line in email (not a normal charge). */
+  isReversalLine    Boolean @default(false)
+  /** When this row is the reversal, points at the original charge that was nullified. */
+  reversesTransactionId String?   @unique
+  reversesTransaction   Transaction?  @relation("TxnReversal", fields: [reversesTransactionId], references: [id], onDelete: SetNull)
+  reversalChildren      Transaction[] @relation("TxnReversal")
+
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
   @@index([userId, occurredAt])
+  @@index([userId, excludedFromSpend])
 }
 
 enum TransactionSource {

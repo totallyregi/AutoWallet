@@ -1,10 +1,18 @@
 "use client";
 
+export type SavedSenderRow = {
+  id: string;
+  email: string;
+  createdAt: string;
+};
+
 type GmailFiltersProps = {
   senderEmail: string;
   onSenderChange: (value: string) => void;
   onSaveSender: (e: React.FormEvent) => void;
   senderBusy: boolean;
+  savedSenders: SavedSenderRow[];
+  onDeleteSavedSender: (id: string) => void;
   gmailAfter: string;
   onAfterChange: (value: string) => void;
   gmailBefore: string;
@@ -20,6 +28,8 @@ export function GmailFilters({
   onSenderChange,
   onSaveSender,
   senderBusy,
+  savedSenders,
+  onDeleteSavedSender,
   gmailAfter,
   onAfterChange,
   gmailBefore,
@@ -33,8 +43,8 @@ export function GmailFilters({
     <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-6">
       <h2 className="text-lg font-medium tracking-tight">Gmail sender filter</h2>
       <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-        Set your bank sender and optional date range or Gmail search, then apply to
-        refresh the list. Saving the sender updates your account preference.
+        Add one or more sender addresses. With no start/end dates, the list includes
+        all mail from those senders. Use dates or search to narrow further, then Apply.
       </p>
 
       <div className="mt-5 space-y-5">
@@ -44,7 +54,7 @@ export function GmailFilters({
         >
           <label className="min-w-0 flex-1">
             <span className="mb-1 block text-xs font-medium text-zinc-500">
-              Sender email (optional)
+              Add sender email
             </span>
             <input
               className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-950"
@@ -63,6 +73,33 @@ export function GmailFilters({
             {senderBusy ? "Saving…" : "Save sender"}
           </button>
         </form>
+
+        {savedSenders.length > 0 && (
+          <div>
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Saved senders ({savedSenders.length})
+            </p>
+            <ul className="flex flex-col gap-2">
+              {savedSenders.map((s) => (
+                <li
+                  key={s.id}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900/40"
+                >
+                  <span className="min-w-0 truncate font-medium text-zinc-800 dark:text-zinc-200">
+                    {s.email}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onDeleteSavedSender(s.id)}
+                    className="shrink-0 rounded-md border border-zinc-300 px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-white dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
           <label className="lg:col-span-2">

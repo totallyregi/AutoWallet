@@ -105,6 +105,9 @@ function DashboardClientImpl({
   const [message, setMessage] = useState<string | null>(null);
   const [senderEmail, setSenderEmail] = useState("");
   const [senderBusy, setSenderBusy] = useState(false);
+  const [savedSenders, setSavedSenders] = useState<
+    { id: string; email: string; createdAt: string }[]
+  >([]);
   const [gmailLoading, setGmailLoading] = useState(false);
   const [gmailAfter, setGmailAfter] = useState("");
   const [gmailBefore, setGmailBefore] = useState("");
@@ -236,8 +239,10 @@ function DashboardClientImpl({
       try {
         const res = await fetch("/api/gmail/sender");
         if (res.ok) {
-          const data = (await res.json()) as { sender?: string };
-          setSenderEmail(data.sender ?? "");
+          const data = (await res.json()) as {
+            senders?: { id: string; email: string; createdAt: string }[];
+          };
+          setSavedSenders(data.senders ?? []);
         }
       } catch {
         // Ignore settings fetch errors; user can still use app.
@@ -308,26 +313,51 @@ function DashboardClientImpl({
 
   async function onSaveSender(e: React.FormEvent) {
     e.preventDefault();
+    const trimmed = senderEmail.trim().toLowerCase();
+    if (!trimmed) {
+      setMessage("Enter an email address to add.");
+      return;
+    }
     setSenderBusy(true);
     setMessage(null);
     try {
       const res = await fetch("/api/gmail/sender", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sender: senderEmail.trim() }),
+        body: JSON.stringify({ sender: trimmed }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as {
+        error?: string;
+        senders?: { id: string; email: string; createdAt: string }[];
+      };
       if (!res.ok) throw new Error(data.error ?? "Failed to save sender");
-      setMessage(
-        senderEmail.trim()
-          ? `Saved sender filter: ${senderEmail.trim().toLowerCase()}`
-          : "Cleared sender filter. The list will use default lookback until you set a sender again.",
-      );
+      setSavedSenders(data.senders ?? []);
+      setSenderEmail("");
+      setMessage(`Added sender: ${trimmed}`);
       await loadGmailReset();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to save sender");
     } finally {
       setSenderBusy(false);
+    }
+  }
+
+  async function onDeleteSavedSender(id: string) {
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/gmail/sender/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        senders?: { id: string; email: string; createdAt: string }[];
+      };
+      if (!res.ok) throw new Error(data.error ?? "Failed to remove sender");
+      setSavedSenders(data.senders ?? []);
+      setMessage("Sender removed.");
+      await loadGmailReset();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Failed to remove sender");
     }
   }
 
@@ -369,7 +399,6 @@ function DashboardClientImpl({
         ),
       );
       await load({ preserveMessage: true });
-      await loadGmailReset();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to parse email");
     } finally {
@@ -565,6 +594,8 @@ function DashboardClientImpl({
               onSenderChange={setSenderEmail}
               onSaveSender={onSaveSender}
               senderBusy={senderBusy}
+              savedSenders={savedSenders}
+              onDeleteSavedSender={onDeleteSavedSender}
               gmailAfter={gmailAfter}
               onAfterChange={setGmailAfter}
               gmailBefore={gmailBefore}

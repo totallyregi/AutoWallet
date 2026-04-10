@@ -15,8 +15,9 @@ export async function GET(req: NextRequest) {
 
   const where: {
     userId: string;
+    excludedFromSpend: boolean;
     occurredAt?: { gte?: Date; lte?: Date };
-  } = { userId: session.user.id };
+  } = { userId: session.user.id, excludedFromSpend: false };
 
   if (from || to) {
     where.occurredAt = {};

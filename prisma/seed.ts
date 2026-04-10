@@ -14,6 +14,7 @@ const categories = [
   { name: "Health", slug: "health" },
   { name: "Education", slug: "education" },
   { name: "Other", slug: "other" },
+  { name: "Reversed", slug: "reversed" },
 ];
 
 async function main() {
