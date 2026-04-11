@@ -1,5 +1,6 @@
 import {
   extractTransactionFromText,
+  isDeclinedTransactionEmail,
   parseOccurredAt,
   resolveCategoryId,
 } from "@/lib/gemini";
@@ -65,6 +66,14 @@ export async function POST(req: NextRequest) {
           include: { category: true },
         }),
       ),
+    });
+  }
+
+  if (isDeclinedTransactionEmail(combined)) {
+    return NextResponse.json({
+      ok: true,
+      skippedDeclined: true,
+      duplicate: false,
     });
   }
 

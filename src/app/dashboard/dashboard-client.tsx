@@ -4,6 +4,17 @@ import type { GmailFullMessagePreview } from "@/lib/gmail-sync";
 import type { TransactionJson } from "@/lib/transaction-json";
 import { EmailBodyPreviewDialog } from "./email-body-preview-dialog";
 import {
+  jobViewFromParseJobConfig,
+  snapshotFromJobView,
+  type ParseHistorySnapshot,
+} from "./parse-job-finished-summary";
+import {
+  ParseHistoryView,
+  prependParseHistoryEntry,
+  truncatePasteForHistory,
+  type ParseHistoryEntry,
+} from "./parse-history-view";
+import {
   ParseJobModal,
   type ParseJobConfig,
   type ParseJobResultLine,
@@ -47,6 +58,7 @@ const TABS = [
   { id: "gmail", label: "Gmail" },
   { id: "capture", label: "Capture" },
   { id: "transactions", label: "Transactions" },
+  { id: "parse-history", label: "Parse history" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -373,11 +385,49 @@ function DashboardClientImpl({
   >("");
   const [minAmountInput, setMinAmountInput] = useState("");
   const [maxAmountInput, setMaxAmountInput] = useState("");
+  const [txKindFilter, setTxKindFilter] = useState<"all" | "reversed" | "charges">(
+    "all",
+  );
+  const [parseToast, setParseToast] = useState<string | null>(null);
+  const parseToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [parseHistoryRevision, setParseHistoryRevision] = useState(0);
   const [txSort, setTxSort] = useState<{
     column: TransactionSortColumn;
     dir: "asc" | "desc";
   }>({ column: "date", dir: "desc" });
   const MAX_BATCH_SELECTION = 10;
+
+  const showParseSuccessToast = useCallback((text: string) => {
+    if (parseToastTimerRef.current) clearTimeout(parseToastTimerRef.current);
+    setParseToast(text);
+    parseToastTimerRef.current = setTimeout(() => {
+      setParseToast(null);
+      parseToastTimerRef.current = null;
+    }, 4500);
+  }, []);
+
+  const recordParseHistory = useCallback(
+    (snapshot: ParseHistorySnapshot, results: ParseJobResultRow[]) => {
+      const entry: ParseHistoryEntry = {
+        id:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `ph-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        completedAt: new Date().toISOString(),
+        snapshot,
+        results: structuredClone(results),
+      };
+      prependParseHistoryEntry(entry);
+      setParseHistoryRevision((n) => n + 1);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (parseToastTimerRef.current) clearTimeout(parseToastTimerRef.current);
+    };
+  }, []);
 
   const yearSelectOptions = useMemo(() => selectableSpendYears(), []);
 
@@ -467,6 +517,11 @@ function DashboardClientImpl({
       if (sourceFilter && tx.source !== sourceFilter) return false;
       if (minAmountBound != null && tx.amount < minAmountBound) return false;
       if (maxAmountBound != null && tx.amount > maxAmountBound) return false;
+      if (txKindFilter === "reversed") {
+        if (!tx.isReversalLine && !tx.displayAsReversed) return false;
+      } else if (txKindFilter === "charges") {
+        if (tx.isReversalLine || tx.displayAsReversed) return false;
+      }
       return true;
     });
   }, [
@@ -476,6 +531,7 @@ function DashboardClientImpl({
     sourceFilter,
     minAmountBound,
     maxAmountBound,
+    txKindFilter,
   ]);
 
   const displayedTransactions = useMemo(() => {
@@ -518,6 +574,7 @@ function DashboardClientImpl({
     setSourceFilter("");
     setMinAmountInput("");
     setMaxAmountInput("");
+    setTxKindFilter("all");
   }, []);
 
   const gmailRows = gmailPages[gmailPageIndex] ?? [];
@@ -811,15 +868,23 @@ function DashboardClientImpl({
     setReceiptParseBusy(false);
     await load({ preserveMessage: true });
     const ok = results.filter((r) => r.status !== "error").length;
+    const snap = snapshotFromJobView(jobViewFromParseJobConfig(job));
+    recordParseHistory(snap, results);
     if (files.length === 1) {
       const r = results[0]!;
-      setMessage(
-        r.status === "error"
-          ? (r.error ?? "Failed to parse receipt")
-          : "Receipt saved.",
-      );
+      if (r.status === "error") {
+        setMessage(r.error ?? "Failed to parse receipt");
+      } else {
+        showParseSuccessToast("Receipt saved.");
+      }
     } else {
-      setMessage(`Receipt parse complete: ${ok}/${results.length} succeeded.`);
+      if (ok === 0) {
+        setMessage("Receipt parse failed for every file.");
+      } else {
+        showParseSuccessToast(
+          `Receipt parse complete: ${ok}/${results.length} succeeded.`,
+        );
+      }
     }
   }
 
@@ -848,21 +913,34 @@ function DashboardClientImpl({
       const data = (await res.json()) as {
         error?: string;
         duplicate?: boolean;
+        skippedDeclined?: boolean;
         transaction?: TransactionJson;
       };
       if (!res.ok) throw new Error(data.error ?? "Parse failed");
-      const dup = Boolean(data.duplicate);
-      const tx = data.transaction;
-      if (!tx) throw new Error("No transaction returned");
-      const lines = transactionToResultLines(tx);
-      results.push({
-        sourceId,
-        title: "Pasted content",
-        status: dup ? "duplicate" : "parsed",
-        createdCount: dup ? 0 : 1,
-        lineCount: 1,
-        createdTransactions: lines,
-      });
+      if (data.skippedDeclined) {
+        results.push({
+          sourceId,
+          title: "Pasted content",
+          status: "parsed",
+          createdCount: 0,
+          lineCount: 0,
+          createdTransactions: [],
+          skippedDeclined: true,
+        });
+      } else {
+        const dup = Boolean(data.duplicate);
+        const tx = data.transaction;
+        if (!tx) throw new Error("No transaction returned");
+        const lines = transactionToResultLines(tx);
+        results.push({
+          sourceId,
+          title: "Pasted content",
+          status: dup ? "duplicate" : "parsed",
+          createdCount: dup ? 0 : 1,
+          lineCount: 1,
+          createdTransactions: lines,
+        });
+      }
     } catch (err) {
       results.push({
         sourceId,
@@ -878,13 +956,26 @@ function DashboardClientImpl({
       setPasteBusy(false);
       await load({ preserveMessage: true });
       const r = results[0]!;
+      let snap = snapshotFromJobView(jobViewFromParseJobConfig(job));
+      if (snap.kind === "text") {
+        snap = {
+          kind: "text",
+          pastedText: truncatePasteForHistory(snap.pastedText),
+        };
+      }
+      recordParseHistory(snap, results);
       if (r.status === "error") {
         setMessage(r.error ?? "Failed to parse");
       } else if (r.status === "duplicate") {
         setMessage("That text was already imported.");
         setPasteText("");
+      } else if (r.skippedDeclined) {
+        showParseSuccessToast(
+          "Nothing imported — pasted text describes a declined transaction (no charge posted).",
+        );
+        setPasteText("");
       } else {
-        setMessage("Text parsed and saved.");
+        showParseSuccessToast("Text parsed and saved.");
         setPasteText("");
       }
     }
@@ -957,6 +1048,7 @@ function DashboardClientImpl({
       createdCount?: number;
       lineCount?: number;
       parseStatus?: "open" | "partial" | "complete";
+      skippedDeclined?: boolean;
       createdTransactions?: {
         merchant: string | null;
         amount: number;
@@ -1007,6 +1099,7 @@ function DashboardClientImpl({
           createdCount: data.createdCount ?? 0,
           lineCount: data.lineCount ?? data.createdCount ?? 0,
           createdTransactions: data.createdTransactions ?? [],
+          skippedDeclined: Boolean(data.skippedDeclined),
         });
         const nextStatus = data.parseStatus ?? "complete";
         setGmailPages((pages) =>
@@ -1039,6 +1132,9 @@ function DashboardClientImpl({
     if (options.clearSelectionAfter) setSelectedMessages({});
     await load({ preserveMessage: true });
 
+    const snap = snapshotFromJobView(jobViewFromParseJobConfig(gmailJob));
+    recordParseHistory(snap, results);
+
     const success = results.filter((r) => r.status !== "error").length;
     if (rows.length === 1) {
       const r = results[0]!;
@@ -1046,15 +1142,25 @@ function DashboardClientImpl({
         setMessage(r.error ?? "Failed to parse email");
       } else if (r.status === "duplicate") {
         setMessage("Email already parsed earlier.");
+      } else if (r.skippedDeclined) {
+        showParseSuccessToast(
+          "Nothing imported — this email describes a declined transaction (no charge posted).",
+        );
       } else if ((r.createdCount ?? 0) > 1) {
-        setMessage(
+        showParseSuccessToast(
           `Parsed email: created ${r.createdCount} transactions (${r.lineCount ?? r.createdCount} lines detected).`,
         );
       } else {
-        setMessage("Parsed email successfully. It is now tracked.");
+        showParseSuccessToast("Parsed email successfully. It is now tracked.");
       }
     } else {
-      setMessage(`Batch parse complete: ${success}/${results.length} succeeded.`);
+      if (success === 0) {
+        setMessage("Batch parse failed for every email.");
+      } else {
+        showParseSuccessToast(
+          `Batch parse complete: ${success}/${results.length} succeeded.`,
+        );
+      }
     }
   }
 
@@ -1211,6 +1317,7 @@ function DashboardClientImpl({
     }`;
 
   return (
+    <>
     <div className="grid items-start gap-6 xl:grid-cols-[250px_minmax(0,1fr)]">
       <aside className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 xl:sticky xl:top-6 xl:h-fit">
         <p className="px-3 pb-3 pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -1231,21 +1338,30 @@ function DashboardClientImpl({
       </aside>
 
       <div className="min-w-0 space-y-6">
+        {activeTab === "overview" && (
+          <header className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              Totals and charts below use the date range above. Switch tabs to
+              Transactions to filter and sort individual rows.
+            </p>
+          </header>
+        )}
+
         {(activeTab === "overview" || activeTab === "transactions") && (
-          <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
+          <div className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
               <div className="shrink-0 lg:max-w-[220px]">
                 <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                   Date range
                 </p>
-                <p className="mt-1 text-sm tabular-nums text-zinc-600 dark:text-zinc-400">
+                <p className="mt-0.5 text-sm tabular-nums text-zinc-600 dark:text-zinc-400">
                   {new Date(range.from).toLocaleDateString()} —{" "}
                   {new Date(range.to).toLocaleDateString()}
                 </p>
               </div>
               <div className="flex min-w-0 w-full justify-end lg:flex-1">
                 <DateRangeControls
-                  variant="transactions"
                   dateRangeMode={dateRangeMode}
                   onDateRangeModeChange={handleDateRangeModeChange}
                   spendMonth={spendMonth}
@@ -1262,16 +1378,6 @@ function DashboardClientImpl({
               </div>
             </div>
           </div>
-        )}
-
-        {activeTab === "overview" && (
-          <header className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              Totals and charts below use the date range above. Switch tabs to
-              Transactions to filter and sort individual rows.
-            </p>
-          </header>
         )}
 
         {message && (
@@ -1501,7 +1607,7 @@ function DashboardClientImpl({
                     Clear filters
                   </button>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                   <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
                     Merchant contains
                     <input
@@ -1565,6 +1671,22 @@ function DashboardClientImpl({
                       onChange={(e) => setMaxAmountInput(e.target.value)}
                       className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
                     />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                    Type
+                    <select
+                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                      value={txKindFilter}
+                      onChange={(e) =>
+                        setTxKindFilter(
+                          e.target.value as "all" | "reversed" | "charges",
+                        )
+                      }
+                    >
+                      <option value="all">All</option>
+                      <option value="reversed">Reversed transactions</option>
+                      <option value="charges">Charges only</option>
+                    </select>
                   </label>
                 </div>
               </div>
@@ -1710,7 +1832,38 @@ function DashboardClientImpl({
             </div>
           </section>
         )}
+
+        {activeTab === "parse-history" && (
+          <ParseHistoryView
+            historyRevision={parseHistoryRevision}
+            onOpenGmailMessage={(id) => {
+              setActiveTab("gmail");
+              setForceOpenEmailId(id);
+            }}
+          />
+        )}
       </div>
+    </div>
+      {parseToast && (
+        <div className="pointer-events-none fixed bottom-4 right-4 z-[85] max-w-sm p-0">
+          <div className="pointer-events-auto flex items-start gap-2 rounded-xl border border-emerald-600/40 bg-emerald-950/95 px-4 py-3 text-sm text-emerald-50 shadow-lg dark:border-emerald-500/50 dark:bg-emerald-950 dark:text-emerald-100">
+            <span className="min-w-0 flex-1">{parseToast}</span>
+            <button
+              type="button"
+              onClick={() => {
+                if (parseToastTimerRef.current) {
+                  clearTimeout(parseToastTimerRef.current);
+                  parseToastTimerRef.current = null;
+                }
+                setParseToast(null);
+              }}
+              className="shrink-0 rounded border border-emerald-500/50 px-2 py-0.5 text-xs font-medium text-emerald-100 hover:bg-emerald-900/80"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
       <ParseJobModal
         open={batchModalOpen}
         running={batchRunning}
@@ -1751,7 +1904,7 @@ function DashboardClientImpl({
         }}
         onSave={onSaveTransactionEdit}
       />
-    </div>
+    </>
   );
 }
 

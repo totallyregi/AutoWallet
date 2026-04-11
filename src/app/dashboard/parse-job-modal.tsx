@@ -1,41 +1,14 @@
 "use client";
 
-import type { GmailTableRow } from "./gmail-types";
+import { ParseJobFinishedSummary, jobViewFromParseJobConfig } from "./parse-job-finished-summary";
+import type { ParseJobConfig, ParseJobResultRow } from "./parse-job-types";
 
-export type ParseJobResultLine = {
-  merchant: string | null;
-  amount: number;
-  currency: string;
-  occurredAt: string;
-  kind: "charge" | "reversal";
-};
-
-export type ParseJobResultRow = {
-  sourceId: string;
-  title: string;
-  subtitle?: string;
-  status: "parsed" | "duplicate" | "error";
-  error?: string;
-  createdCount?: number;
-  lineCount?: number;
-  createdTransactions?: ParseJobResultLine[];
-};
-
-export type ReceiptParseSource = {
-  id: string;
-  name: string;
-  previewUrl: string;
-  isPdf: boolean;
-};
-
-export type ParseJobConfig =
-  | {
-      kind: "gmail";
-      rows: GmailTableRow[];
-      onOpenEmail: (gmailMessageId: string) => void;
-    }
-  | { kind: "receipt"; sources: ReceiptParseSource[] }
-  | { kind: "text"; pastedText: string };
+export type {
+  ParseJobConfig,
+  ParseJobResultLine,
+  ParseJobResultRow,
+  ReceiptParseSource,
+} from "./parse-job-types";
 
 type ParseJobModalProps = {
   open: boolean;
@@ -236,124 +209,11 @@ export function ParseJobModal({
             </ul>
           )}
 
-          {hasFinished && job.kind === "text" && (
-            <div className="mb-4 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/40">
-              <p className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                Original text
-              </p>
-              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-800 dark:text-zinc-200">
-                {job.pastedText}
-              </pre>
-            </div>
-          )}
-
           {hasFinished && (
-            <div className="space-y-2">
-              {results.map((row) => {
-                const receiptSrc =
-                  job.kind === "receipt"
-                    ? job.sources.find((s) => s.id === row.sourceId)
-                    : undefined;
-
-                return (
-                  <div
-                    key={row.sourceId}
-                    className="rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800"
-                  >
-                    {job.kind === "gmail" && (
-                      <div className="flex items-center justify-between gap-3">
-                        <button
-                          type="button"
-                          onClick={() => job.onOpenEmail(row.sourceId)}
-                          className="min-w-0 truncate text-left text-sm font-medium hover:underline"
-                        >
-                          {row.title || "(No subject)"}
-                        </button>
-                        <span className="text-xs text-zinc-500">{row.status}</span>
-                      </div>
-                    )}
-                    {job.kind === "gmail" && row.subtitle && (
-                      <p className="text-xs text-zinc-500">{row.subtitle}</p>
-                    )}
-
-                    {job.kind === "receipt" && (
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="min-w-0 truncate text-sm font-medium">
-                          {row.title}
-                        </span>
-                        <span className="text-xs text-zinc-500">{row.status}</span>
-                      </div>
-                    )}
-
-                    {job.kind === "receipt" && receiptSrc && (
-                      <div className="mt-2">
-                        <ReceiptPreview
-                          url={receiptSrc.previewUrl}
-                          isPdf={receiptSrc.isPdf}
-                          name={receiptSrc.name}
-                        />
-                      </div>
-                    )}
-
-                    {job.kind === "text" && (
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-medium">Parse outcome</span>
-                        <span className="text-xs text-zinc-500">{row.status}</span>
-                      </div>
-                    )}
-
-                    {row.status === "parsed" && (
-                      <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
-                        <p>
-                          Created {row.createdCount ?? 0} transaction(s) from{" "}
-                          {row.lineCount ?? row.createdCount ?? 0} detected line(s).
-                        </p>
-                        {row.createdTransactions &&
-                          row.createdTransactions.length > 0 && (
-                            <ul className="mt-1 list-disc pl-4">
-                              {row.createdTransactions.map((tx, idx) => (
-                                <li key={`${row.sourceId}-${idx}`}>
-                                  {tx.kind === "reversal" ? "Reversal" : "Charge"} ·{" "}
-                                  {tx.merchant || "Unknown merchant"} ·{" "}
-                                  {new Intl.NumberFormat(undefined, {
-                                    style: "currency",
-                                    currency: tx.currency || "USD",
-                                  }).format(tx.amount)}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                      </div>
-                    )}
-                    {row.status === "duplicate" && (
-                      <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
-                        <p>Already imported — no new transaction created.</p>
-                        {row.createdTransactions &&
-                          row.createdTransactions.length > 0 && (
-                            <ul className="mt-1 list-disc pl-4">
-                              {row.createdTransactions.map((tx, idx) => (
-                                <li key={`${row.sourceId}-dup-${idx}`}>
-                                  {tx.kind === "reversal" ? "Reversal" : "Charge"} ·{" "}
-                                  {tx.merchant || "Unknown merchant"} ·{" "}
-                                  {new Intl.NumberFormat(undefined, {
-                                    style: "currency",
-                                    currency: tx.currency || "USD",
-                                  }).format(tx.amount)}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                      </div>
-                    )}
-                    {row.error && (
-                      <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                        {row.error}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <ParseJobFinishedSummary
+              job={jobViewFromParseJobConfig(job)}
+              results={results}
+            />
           )}
         </div>
       </div>

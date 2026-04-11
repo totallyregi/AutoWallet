@@ -56,8 +56,30 @@ Rules:
 - categorySlug: one of the allowed slugs below
 - date: ISO 8601 best effort per line or email date
 - CRITICAL: If the subject or body describes reversals, refunds, or credits back to a wallet (e.g. "Summary of reversed transactions", "funds are safely back"), every listed line MUST use entryKind "reversal" with reversesReferenceId set to that line's bank reference (same as referenceId when YouTrip shows one Ref. No per line). Never treat those lines as new spending.
+- CRITICAL: If the email is only about a declined/failed/rejected card or Apple Pay authorization (no charge posted — e.g. "transaction was declined", "payment declined", "authorization declined"), respond with exactly { "transactions": [] }. Never extract merchant lines from those notifications as spending.
 
 ${buildCategoryHint()}`;
+
+/**
+ * Card/wallet apps: declined-authorization notices describe no spend — do not
+ * import a charge (e.g. YouTrip "Apple Pay transaction declined").
+ */
+export function isDeclinedTransactionEmail(text: string): boolean {
+  const t = text.slice(0, 8000).toLowerCase();
+  if (t.length < 12) return false;
+  return (
+    /\btransaction (was )?declined\b/.test(t) ||
+    /\bpayment (was )?declined\b/.test(t) ||
+    /\bauthorization (was )?declined\b/.test(t) ||
+    /\bapple pay transaction declined\b/.test(t) ||
+    /\bcard transaction declined\b/.test(t) ||
+    /\bwas declined due to\b/.test(t) ||
+    /\bwas declined (for|because)\b/.test(t) ||
+    /\bdeclined due to security\b/.test(t) ||
+    /\btransaction could not be processed\b/.test(t) ||
+    /\bunable to authorize\b/.test(t)
+  );
+}
 
 /** YouTrip / card apps: reversal digest must not be ingested as new charges. */
 function isReversalSummaryEmail(text: string): boolean {
@@ -95,6 +117,8 @@ function applyReversalEmailCoercion(
 export async function extractTransactionsFromEmailText(
   text: string,
 ): Promise<ExtractedEmailLine[]> {
+  if (isDeclinedTransactionEmail(text)) return [];
+
   const model = getModel();
   const prompt = `${MULTI_EMAIL_INSTRUCTION}\n\n---\nCONTENT:\n${text.slice(0, 12000)}`;
   let result;
@@ -229,6 +253,12 @@ function regexFallbackMultipleTransactions(text: string): ExtractedEmailLine[] {
 export async function extractTransactionFromText(
   text: string,
 ): Promise<ExtractedTransaction> {
+  if (isDeclinedTransactionEmail(text)) {
+    throw new Error(
+      "This message describes a declined or failed authorization; no charge was posted.",
+    );
+  }
+
   const model = getModel();
   const prompt = `${EXTRACTION_INSTRUCTION}\n\n---\nCONTENT:\n${text.slice(0, 12000)}`;
   let result;

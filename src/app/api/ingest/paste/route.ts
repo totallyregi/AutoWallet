@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import {
   extractTransactionFromText,
+  isDeclinedTransactionEmail,
   parseOccurredAt,
   resolveCategoryId,
 } from "@/lib/gemini";
@@ -36,6 +37,10 @@ export async function POST(req: NextRequest) {
       duplicate: true,
       transaction: transactionToJson(full),
     });
+  }
+
+  if (isDeclinedTransactionEmail(text)) {
+    return NextResponse.json({ skippedDeclined: true, duplicate: false });
   }
 
   const extracted = await extractTransactionFromText(text);

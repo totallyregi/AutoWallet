@@ -11,6 +11,7 @@ import type { ExtractedEmailLine } from "@/lib/extraction-schema";
 import prisma from "@/lib/prisma";
 import {
   extractTransactionsFromEmailText,
+  isDeclinedTransactionEmail,
   parseOccurredAt,
   resolveCategoryId,
 } from "@/lib/gemini";
@@ -396,7 +397,10 @@ export async function parseAndStoreGmailMessage(
   const bestContent = (fullText || preview.snippet || "").slice(0, 16000);
 
   const combined = `From: ${preview.from}\nSubject: ${preview.subject}\nDate: ${preview.date}\n\n${bestContent}`;
-  const lines = await extractTransactionsFromEmailText(combined);
+  const skippedDeclined = isDeclinedTransactionEmail(combined);
+  const lines = skippedDeclined
+    ? []
+    : await extractTransactionsFromEmailText(combined);
 
   let createdCount = 0;
   let duplicateCount = 0;
@@ -568,11 +572,15 @@ export async function parseAndStoreGmailMessage(
 
   return {
     created: createdCount > 0,
-    duplicate: createdCount === 0 && duplicateCount >= lines.length,
+    duplicate:
+      lines.length > 0 &&
+      createdCount === 0 &&
+      duplicateCount >= lines.length,
     createdCount,
     duplicateCount,
     lineCount: lines.length,
     createdTransactions,
+    skippedDeclined,
   };
 }
 
