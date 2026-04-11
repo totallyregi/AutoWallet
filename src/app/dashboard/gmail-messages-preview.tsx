@@ -2,6 +2,7 @@
 
 import type { GmailFullMessagePreview } from "@/lib/gmail-sync";
 import type { GmailConnectionState, GmailTableRow } from "./gmail-types";
+import { EmailBodyPreviewDialog } from "./email-body-preview-dialog";
 import { signIn } from "next-auth/react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -66,7 +67,6 @@ export function GmailMessagesPreview({
   const [emailPreview, setEmailPreview] = useState<EmailPreviewState | null>(
     null,
   );
-  const [previewMode, setPreviewMode] = useState<"html" | "text">("html");
 
   const closeEmailPreview = useCallback(() => setEmailPreview(null), []);
 
@@ -87,7 +87,6 @@ export function GmailMessagesPreview({
         error: null,
         detail: data as GmailFullMessagePreview,
       });
-      setPreviewMode("html");
     } catch (e) {
       setEmailPreview({
         row,
@@ -97,15 +96,6 @@ export function GmailMessagesPreview({
       });
     }
   }, []);
-
-  useEffect(() => {
-    if (!emailPreview) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setEmailPreview(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [emailPreview]);
 
   useEffect(() => {
     if (!forceOpenEmailId) return;
@@ -384,134 +374,17 @@ export function GmailMessagesPreview({
       </div>
 
       {emailPreview && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 backdrop-blur-[1px] sm:items-center"
-          role="presentation"
-          onClick={closeEmailPreview}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="email-preview-title"
-            className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
-              <div className="min-w-0 flex-1">
-                <h3
-                  id="email-preview-title"
-                  className="text-lg font-semibold leading-snug text-zinc-900 dark:text-zinc-100"
-                >
-                  {emailPreview.detail?.subject ||
-                    emailPreview.row.subject ||
-                    "(No subject)"}
-                </h3>
-                <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                  <span className="block truncate">
-                    From:{" "}
-                    {emailPreview.detail?.from ||
-                      emailPreview.row.from ||
-                      "—"}
-                  </span>
-                  <span className="mt-0.5 block">
-                    Date:{" "}
-                    {emailPreview.detail?.date || emailPreview.row.date
-                      ? new Date(
-                          emailPreview.detail?.date || emailPreview.row.date,
-                        ).toLocaleString()
-                      : "—"}
-                  </span>
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={closeEmailPreview}
-                className="shrink-0 rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
-              >
-                Close
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              {emailPreview.loading && (
-                <p className="text-sm text-zinc-500">Loading full message…</p>
-              )}
-              {emailPreview.error && (
-                <p
-                  className="text-sm text-red-600 dark:text-red-400"
-                  role="alert"
-                >
-                  {emailPreview.error}
-                </p>
-              )}
-              {!emailPreview.loading &&
-                !emailPreview.error &&
-                emailPreview.detail && (
-                  <div className="space-y-4">
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewMode("html")}
-                        className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-                          previewMode === "html"
-                            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                            : "border border-zinc-300 text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
-                        }`}
-                      >
-                        HTML view
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPreviewMode("text")}
-                        className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-                          previewMode === "text"
-                            ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                            : "border border-zinc-300 text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
-                        }`}
-                      >
-                        Text view
-                      </button>
-                    </div>
-                    {emailPreview.detail.snippet && (
-                      <div>
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                          Snippet
-                        </p>
-                        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                          {emailPreview.detail.snippet}
-                        </p>
-                      </div>
-                    )}
-                    <div>
-                      {previewMode === "html" &&
-                      emailPreview.detail.bodyHtmlSanitized ? (
-                        <div>
-                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                            Body (sanitized HTML)
-                          </p>
-                          <div
-                            className="prose prose-sm max-w-none overflow-x-auto rounded-md border border-zinc-200 p-3 dark:prose-invert dark:border-zinc-800"
-                            dangerouslySetInnerHTML={{
-                              __html: emailPreview.detail.bodyHtmlSanitized,
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div>
-                          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                            Body (plain text)
-                          </p>
-                          <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
-                            {emailPreview.detail.bodyText.trim() ||
-                              "No text body could be extracted (try HTML-only message)."}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-            </div>
-          </div>
-        </div>
+        <EmailBodyPreviewDialog
+          key={emailPreview.row.gmailMessageId}
+          open
+          onClose={closeEmailPreview}
+          loading={emailPreview.loading}
+          error={emailPreview.error}
+          detail={emailPreview.detail}
+          fallbackSubject={emailPreview.row.subject}
+          fallbackFrom={emailPreview.row.from}
+          fallbackDate={emailPreview.row.date}
+        />
       )}
     </>
   );

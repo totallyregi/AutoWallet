@@ -1,8 +1,10 @@
+import { Prisma } from "@prisma/client";
 import { google } from "googleapis";
 import {
   refreshEmailParseSnapshot,
   normalizeRfcMessageId,
 } from "@/lib/email-parse-snapshot";
+import type { ExtractedEmailLine } from "@/lib/extraction-schema";
 import prisma from "@/lib/prisma";
 import {
   extractTransactionsFromEmailText,
@@ -285,6 +287,32 @@ export async function getGmailMessagePreviewForUser(
   );
 }
 
+/**
+ * Find Gmail API message id by RFC 5322 Message-ID (normalized, without angle brackets).
+ * Uses Gmail search operator rfc822msgid — works even when the message is outside the inbox list query.
+ */
+export async function findGmailMessageIdByRfcMessageId(
+  userId: string,
+  normalizedRfcMessageId: string,
+): Promise<string | null> {
+  const key = normalizedRfcMessageId.trim();
+  if (!key) return null;
+  const gmail = await getGmailClientForUser(userId);
+  const q = `rfc822msgid:${key}`;
+  let list;
+  try {
+    list = await gmail.users.messages.list({
+      userId: "me",
+      maxResults: 1,
+      q,
+    });
+  } catch (e) {
+    throw mapGmailApiError(e);
+  }
+  const first = list.data.messages?.[0];
+  return first?.id ?? null;
+}
+
 const FULL_BODY_MAX_CHARS = 120_000;
 
 /**
@@ -392,11 +420,9 @@ export async function parseAndStoreGmailMessage(
     const kind = extracted.entryKind ?? "charge";
 
     if (kind === "reversal") {
-      const refForMatch =
-        extracted.reversesReferenceId?.trim() || extracted.referenceId?.trim();
       const reversedCategoryId = await resolveCategoryId("reversed");
       const confidence = extracted.confidence ?? 0.7;
-      const orig = await findChargeByBankReference(userId, refForMatch);
+      const orig = await findOriginalChargeForReversal(userId, extracted);
 
       if (orig) {
         await prisma.$transaction(async (db) => {
@@ -541,8 +567,88 @@ async function findChargeByBankReference(
       excludedFromSpend: false,
       externalId: { endsWith: `:${safe}` },
     },
+    orderBy: { createdAt: "asc" },
     select: { id: true, notes: true },
   });
+}
+
+const MERCHANT_BRAND_MARKERS = [
+  "UBER",
+  "UBR",
+  "LYFT",
+  "GRAB",
+  "BOLT",
+  "DIDI",
+] as const;
+
+function merchantBrandHits(merchant: string | null | undefined): Set<string> {
+  const u = (merchant ?? "").toUpperCase();
+  const hits = new Set<string>();
+  for (const b of MERCHANT_BRAND_MARKERS) {
+    if (u.includes(b)) hits.add(b);
+  }
+  return hits;
+}
+
+/**
+ * When the reversal email uses a different bank ref than an earlier pending
+ * authorization row (same amount + brand, close dates), still pair them.
+ */
+async function findChargeByAmountAndBrandFallback(
+  userId: string,
+  extracted: ExtractedEmailLine,
+): Promise<{ id: string; notes: string | null } | null> {
+  const brands = merchantBrandHits(extracted.merchant);
+  if (brands.size === 0) return null;
+
+  const reversalDate = parseOccurredAt(extracted.date);
+  const windowMs = 21 * 24 * 60 * 60 * 1000;
+  const amountDec = new Prisma.Decimal(extracted.amount.toFixed(2));
+
+  const candidates = await prisma.transaction.findMany({
+    where: {
+      userId,
+      isReversalLine: false,
+      excludedFromSpend: false,
+      source: "email",
+      currency: extracted.currency,
+      amount: amountDec,
+      occurredAt: {
+        gte: new Date(reversalDate.getTime() - windowMs),
+        lte: new Date(reversalDate.getTime() + 2 * 24 * 60 * 60 * 1000),
+      },
+    },
+    select: { id: true, notes: true, merchant: true, occurredAt: true },
+    orderBy: { occurredAt: "desc" },
+    take: 80,
+  });
+
+  const scored = candidates
+    .filter((c) => {
+      const cb = merchantBrandHits(c.merchant);
+      for (const b of brands) {
+        if (cb.has(b)) return true;
+      }
+      return false;
+    })
+    .map((c) => ({
+      c,
+      diffMs: Math.abs(c.occurredAt.getTime() - reversalDate.getTime()),
+    }))
+    .sort((a, b) => a.diffMs - b.diffMs);
+
+  return scored[0]?.c ?? null;
+}
+
+async function findOriginalChargeForReversal(
+  userId: string,
+  extracted: ExtractedEmailLine,
+): Promise<{ id: string; notes: string | null } | null> {
+  const refForMatch =
+    extracted.reversesReferenceId?.trim() || extracted.referenceId?.trim();
+  const byRef = await findChargeByBankReference(userId, refForMatch);
+  if (byRef) return byRef;
+  return findChargeByAmountAndBrandFallback(userId, extracted);
 }
 
 function decodeBase64Url(input: string): string {

@@ -67,7 +67,13 @@ export function GmailBatchParseModal({
                 id="batch-parse-title"
                 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100"
               >
-                {running ? "Parsing selected emails…" : "Batch parse results"}
+                {running
+                  ? total === 1
+                    ? "Parsing email…"
+                    : "Parsing selected emails…"
+                  : total === 1
+                    ? "Parse result"
+                    : "Batch parse results"}
               </h3>
               <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
                 {done}/{total} processed

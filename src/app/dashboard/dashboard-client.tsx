@@ -1,6 +1,8 @@
 "use client";
 
+import type { GmailFullMessagePreview } from "@/lib/gmail-sync";
 import type { TransactionJson } from "@/lib/transaction-json";
+import { EmailBodyPreviewDialog } from "./email-body-preview-dialog";
 import { GmailBatchParseModal, type BatchParseResultRow } from "./gmail-batch-parse-modal";
 import { GmailFilters } from "./gmail-filters";
 import { GmailMessagesPreview } from "./gmail-messages-preview";
@@ -127,7 +129,13 @@ function DashboardClientImpl({
   const [batchTotal, setBatchTotal] = useState(0);
   const [batchCurrentLabel, setBatchCurrentLabel] = useState<string>("");
   const [batchResults, setBatchResults] = useState<BatchParseResultRow[]>([]);
+  const [batchModalRows, setBatchModalRows] = useState<GmailTableRow[]>([]);
   const [forceOpenEmailId, setForceOpenEmailId] = useState<string | null>(null);
+  const [sourceEmailTxId, setSourceEmailTxId] = useState<string | null>(null);
+  const [sourceEmailLoading, setSourceEmailLoading] = useState(false);
+  const [sourceEmailError, setSourceEmailError] = useState<string | null>(null);
+  const [sourceEmailDetail, setSourceEmailDetail] =
+    useState<GmailFullMessagePreview | null>(null);
   const [editTx, setEditTx] = useState<TransactionJson | null>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
@@ -423,83 +431,24 @@ function DashboardClientImpl({
     return data;
   }
 
-  async function onParseOne(gmailMessageId: string) {
-    setParseBusyId(gmailMessageId);
-    setMessage(null);
-    try {
-      const data = await parseEmailById(gmailMessageId);
-      if (data.duplicate) {
-        setMessage("Email already parsed earlier.");
-      } else if ((data.createdCount ?? 0) > 1) {
-        setMessage(
-          `Parsed email: created ${data.createdCount} transactions (${data.lineCount ?? data.createdCount} lines detected).`,
-        );
-      } else {
-        setMessage("Parsed email successfully. It is now tracked.");
-      }
-      const nextStatus = data.parseStatus ?? "complete";
-      setGmailPages((pages) =>
-        pages.map((pg) =>
-          pg.some((m) => m.gmailMessageId === gmailMessageId)
-            ? pg.map((m) =>
-                m.gmailMessageId === gmailMessageId
-                  ? { ...m, parseStatus: nextStatus }
-                  : m,
-              )
-            : pg,
-        ),
-      );
-      await load({ preserveMessage: true });
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Failed to parse email");
-    } finally {
-      setParseBusyId(null);
-    }
-  }
-
-  function onToggleSelected(row: GmailTableRow, checked: boolean) {
-    setSelectedMessages((prev) => {
-      const next = { ...prev };
-      if (checked) {
-        if (next[row.gmailMessageId]) return prev;
-        if (Object.keys(next).length >= MAX_BATCH_SELECTION) return prev;
-        next[row.gmailMessageId] = row;
-        return next;
-      }
-      delete next[row.gmailMessageId];
-      return next;
-    });
-  }
-
-  function onToggleSelectPage(rows: GmailTableRow[], checked: boolean) {
-    setSelectedMessages((prev) => {
-      const next = { ...prev };
-      if (!checked) {
-        for (const r of rows) delete next[r.gmailMessageId];
-        return next;
-      }
-      for (const r of rows) {
-        if (Object.keys(next).length >= MAX_BATCH_SELECTION) break;
-        if (!next[r.gmailMessageId]) next[r.gmailMessageId] = r;
-      }
-      return next;
-    });
-  }
-
-  async function onParseSelected() {
-    if (selectedRows.length === 0) return;
-    const toParse = selectedRows.slice(0, MAX_BATCH_SELECTION);
+  async function runGmailParseJob(
+    rows: GmailTableRow[],
+    options: { clearSelectionAfter: boolean },
+  ) {
+    if (rows.length === 0) return;
+    setBatchModalRows(rows);
     setBatchModalOpen(true);
     setBatchRunning(true);
     setBatchDone(0);
-    setBatchTotal(toParse.length);
+    setBatchTotal(rows.length);
     setBatchResults([]);
     setBatchCurrentLabel("");
     setMessage(null);
 
     const results: BatchParseResultRow[] = [];
-    for (let i = 0; i < toParse.length; i++) {
-      const row = toParse[i]!;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
+      setParseBusyId(row.gmailMessageId);
       setBatchCurrentLabel(row.subject || row.from || "Email");
       try {
         const data = await parseEmailById(row.gmailMessageId);
@@ -542,10 +491,106 @@ function DashboardClientImpl({
     }
     setBatchRunning(false);
     setBatchCurrentLabel("");
-    setSelectedMessages({});
+    setParseBusyId(null);
+    if (options.clearSelectionAfter) setSelectedMessages({});
     await load({ preserveMessage: true });
+
     const success = results.filter((r) => r.status !== "error").length;
-    setMessage(`Batch parse complete: ${success}/${results.length} succeeded.`);
+    if (rows.length === 1) {
+      const r = results[0]!;
+      if (r.status === "error") {
+        setMessage(r.error ?? "Failed to parse email");
+      } else if (r.status === "duplicate") {
+        setMessage("Email already parsed earlier.");
+      } else if ((r.createdCount ?? 0) > 1) {
+        setMessage(
+          `Parsed email: created ${r.createdCount} transactions (${r.lineCount ?? r.createdCount} lines detected).`,
+        );
+      } else {
+        setMessage("Parsed email successfully. It is now tracked.");
+      }
+    } else {
+      setMessage(`Batch parse complete: ${success}/${results.length} succeeded.`);
+    }
+  }
+
+  function onParseOne(gmailMessageId: string) {
+    const pool = gmailPages.flat();
+    const row = pool.find((r) => r.gmailMessageId === gmailMessageId);
+    if (!row) {
+      setMessage(
+        "Could not find this message in the loaded list. Try refreshing Gmail.",
+      );
+      return;
+    }
+    void runGmailParseJob([row], { clearSelectionAfter: false });
+  }
+
+  function onToggleSelected(row: GmailTableRow, checked: boolean) {
+    setSelectedMessages((prev) => {
+      const next = { ...prev };
+      if (checked) {
+        if (next[row.gmailMessageId]) return prev;
+        if (Object.keys(next).length >= MAX_BATCH_SELECTION) return prev;
+        next[row.gmailMessageId] = row;
+        return next;
+      }
+      delete next[row.gmailMessageId];
+      return next;
+    });
+  }
+
+  function onToggleSelectPage(rows: GmailTableRow[], checked: boolean) {
+    setSelectedMessages((prev) => {
+      const next = { ...prev };
+      if (!checked) {
+        for (const r of rows) delete next[r.gmailMessageId];
+        return next;
+      }
+      for (const r of rows) {
+        if (Object.keys(next).length >= MAX_BATCH_SELECTION) break;
+        if (!next[r.gmailMessageId]) next[r.gmailMessageId] = r;
+      }
+      return next;
+    });
+  }
+
+  function onParseSelected() {
+    if (selectedRows.length === 0) return;
+    const toParse = selectedRows.slice(0, MAX_BATCH_SELECTION);
+    void runGmailParseJob(toParse, { clearSelectionAfter: true });
+  }
+
+  async function openSourceEmailForTransaction(txId: string) {
+    setSourceEmailTxId(txId);
+    setSourceEmailLoading(true);
+    setSourceEmailError(null);
+    setSourceEmailDetail(null);
+    try {
+      const res = await fetch(
+        `/api/transactions/${encodeURIComponent(txId)}/source-email`,
+      );
+      const data = (await res.json()) as {
+        error?: string;
+        gmailMessageId?: string;
+        bodyText?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? "Failed to load source email");
+      setSourceEmailDetail(data as GmailFullMessagePreview);
+    } catch (e) {
+      setSourceEmailError(
+        e instanceof Error ? e.message : "Failed to load source email",
+      );
+    } finally {
+      setSourceEmailLoading(false);
+    }
+  }
+
+  function closeSourceEmailDialog() {
+    setSourceEmailTxId(null);
+    setSourceEmailLoading(false);
+    setSourceEmailError(null);
+    setSourceEmailDetail(null);
   }
 
   async function onSaveTransactionEdit(payload: {
@@ -947,6 +992,18 @@ function DashboardClientImpl({
                           }).format(tx.amount)}
                         </td>
                         <td className="px-4 py-3 text-right">
+                          {tx.source === "email" &&
+                            tx.externalId?.startsWith("email:") && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void openSourceEmailForTransaction(tx.id)
+                                }
+                                className="mr-2 h-8 rounded-md border border-sky-300 px-2.5 text-xs font-medium text-sky-800 hover:bg-sky-50 dark:border-sky-700/60 dark:text-sky-200 dark:hover:bg-sky-950/40"
+                              >
+                                Source email
+                              </button>
+                            )}
                           <button
                             type="button"
                             onClick={() => setEditTx(tx)}
@@ -979,14 +1036,21 @@ function DashboardClientImpl({
         total={batchTotal}
         currentLabel={batchCurrentLabel}
         results={batchResults}
-        selectedRows={selectedRows}
+        selectedRows={batchModalRows}
         onClose={() => {
           if (!batchRunning) setBatchModalOpen(false);
         }}
         onOpenEmail={(gmailMessageId) => {
-          setBatchModalOpen(false);
           setForceOpenEmailId(gmailMessageId);
         }}
+      />
+      <EmailBodyPreviewDialog
+        key={sourceEmailTxId ?? "closed"}
+        open={sourceEmailTxId !== null}
+        onClose={closeSourceEmailDialog}
+        loading={sourceEmailLoading}
+        error={sourceEmailError}
+        detail={sourceEmailDetail}
       />
       <TransactionEditModal
         key={editTx?.id ?? "no-edit"}

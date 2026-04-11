@@ -55,8 +55,42 @@ Rules:
 - If the email has only one charge, return exactly one object in the array
 - categorySlug: one of the allowed slugs below
 - date: ISO 8601 best effort per line or email date
+- CRITICAL: If the subject or body describes reversals, refunds, or credits back to a wallet (e.g. "Summary of reversed transactions", "funds are safely back"), every listed line MUST use entryKind "reversal" with reversesReferenceId set to that line's bank reference (same as referenceId when YouTrip shows one Ref. No per line). Never treat those lines as new spending.
 
 ${buildCategoryHint()}`;
+
+/** YouTrip / card apps: reversal digest must not be ingested as new charges. */
+function isReversalSummaryEmail(text: string): boolean {
+  const t = text.slice(0, 6000).toLowerCase();
+  return (
+    /\bsummary of reversed transactions\b/.test(t) ||
+    /\breversed transactions\b/.test(t) ||
+    /\byour funds are safely back\b/.test(t) ||
+    /\bcredited back (to )?your wallet\b/.test(t) ||
+    /\bpayment reversal\b/.test(t) ||
+    /\bvoided (purchase|transaction)\b/.test(t)
+  );
+}
+
+function applyReversalEmailCoercion(
+  text: string,
+  lines: ExtractedEmailLine[],
+): ExtractedEmailLine[] {
+  if (!isReversalSummaryEmail(text) || lines.length === 0) return lines;
+  return lines.map((line) => {
+    if (line.entryKind === "reversal") {
+      return {
+        ...line,
+        reversesReferenceId: line.reversesReferenceId ?? line.referenceId,
+      };
+    }
+    return {
+      ...line,
+      entryKind: "reversal",
+      reversesReferenceId: line.reversesReferenceId ?? line.referenceId,
+    };
+  });
+}
 
 export async function extractTransactionsFromEmailText(
   text: string,
@@ -77,20 +111,24 @@ export async function extractTransactionsFromEmailText(
   }
   const raw = result.response.text().trim();
   const fromModel = parseMultiFromModelRaw(raw, text);
-  if (fromModel.length > 0) return fromModel;
+  if (fromModel.length > 0) {
+    return applyReversalEmailCoercion(text, fromModel);
+  }
 
   const regexLines = regexFallbackMultipleTransactions(text);
-  if (regexLines.length > 0) return regexLines;
+  if (regexLines.length > 0) {
+    return applyReversalEmailCoercion(text, regexLines);
+  }
 
   const single = await extractTransactionFromText(text);
-  return [
+  return applyReversalEmailCoercion(text, [
     {
       ...single,
       referenceId: null,
       entryKind: "charge" as const,
       reversesReferenceId: null,
     },
-  ];
+  ]);
 }
 
 function parseMultiFromModelRaw(
@@ -143,6 +181,7 @@ function regexFallbackMultipleTransactions(text: string): ExtractedEmailLine[] {
   if (parts.length < 2) return [];
 
   const nowIso = new Date().toISOString();
+  const asReversal = isReversalSummaryEmail(text);
   const out: ExtractedEmailLine[] = [];
 
   for (const part of parts) {
@@ -174,11 +213,13 @@ function regexFallbackMultipleTransactions(text: string): ExtractedEmailLine[] {
       merchant: merchantLine,
       date: nowIso,
       categorySlug: "transport",
-      notes: "Parsed via reference + amount pattern (multi-line email).",
+      notes: asReversal
+        ? "Parsed via reference + amount pattern (reversal-summary email)."
+        : "Parsed via reference + amount pattern (multi-line email).",
       confidence: 0.55,
       referenceId: refM[1],
-      entryKind: "charge",
-      reversesReferenceId: null,
+      entryKind: asReversal ? "reversal" : "charge",
+      reversesReferenceId: asReversal ? refM[1] : null,
     });
   }
 
