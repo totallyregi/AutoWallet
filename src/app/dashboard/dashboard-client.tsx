@@ -1243,7 +1243,7 @@ function DashboardClientImpl({
                   {new Date(range.to).toLocaleDateString()}
                 </p>
               </div>
-              <div className="min-w-0 w-full lg:max-w-2xl lg:flex-1">
+              <div className="flex min-w-0 w-full justify-end lg:flex-1">
                 <DateRangeControls
                   variant="transactions"
                   dateRangeMode={dateRangeMode}

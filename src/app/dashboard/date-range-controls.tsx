@@ -37,20 +37,12 @@ export function DateRangeControls({
   yearSelectOptions,
   monthOptions,
 }: DateRangeControlsProps) {
-  const selectH = variant === "overview" ? "h-10" : "h-9";
-  const selectPad = variant === "overview" ? "px-3" : "px-2";
-  const selectClass = `${selectH} rounded-lg border border-zinc-300 bg-white ${selectPad} text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100`;
-  const monthMinW = variant === "overview" ? "min-w-[160px]" : "min-w-[150px]";
-  const yearMinW = variant === "overview" ? "min-w-[100px]" : "min-w-[92px]";
-  const dateInputClass =
-    "h-9 w-full min-w-[140px] rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950 sm:h-10";
-
-  /** Fixed min height so switching quick ↔ custom does not move content below. */
-  const bodyMinH = "min-h-[8.75rem]";
+  const fieldH = variant === "overview" ? "h-10" : "h-9";
+  const controlBox = `w-full ${fieldH} min-w-0 rounded-lg border border-zinc-300 bg-white px-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100`;
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-2">
+    <div className="ms-auto flex w-full max-w-md flex-col items-end gap-3">
+      <div className="flex flex-shrink-0 flex-wrap justify-end gap-2">
         <button
           type="button"
           onClick={() => onDateRangeModeChange("quick")}
@@ -75,70 +67,68 @@ export function DateRangeControls({
         </button>
       </div>
 
-      <div className={bodyMinH}>
-        {dateRangeMode === "quick" ? (
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
-              Month
-              <select
-                className={`${selectClass} ${monthMinW}`}
-                value={spendMonth ?? ""}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  onSpendMonthChange(v === "" ? null : Number(v));
-                }}
-              >
-                <option value="">All months</option>
-                {monthOptions.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
-              Year
-              <select
-                className={`${selectClass} ${yearMinW} tabular-nums`}
-                value={spendYear}
-                onChange={(e) => onSpendYearChange(Number(e.target.value))}
-              >
-                {yearSelectOptions.map((y) => (
-                  <option key={y} value={y}>
-                    {y}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="flex min-w-[140px] flex-1 flex-col gap-1 text-xs font-medium text-zinc-500 sm:max-w-[200px]">
+      <div
+        className={`w-full ${variant === "overview" ? "h-[5.5rem]" : "h-[5.25rem]"}`}
+      >
+        <div className="grid h-full grid-cols-2 gap-3">
+          {dateRangeMode === "quick" ? (
+            <>
+              <label className="flex min-h-0 flex-col justify-end gap-1 text-left text-xs font-medium text-zinc-500">
+                Month
+                <select
+                  className={controlBox}
+                  value={spendMonth ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    onSpendMonthChange(v === "" ? null : Number(v));
+                  }}
+                >
+                  <option value="">All months</option>
+                  {monthOptions.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex min-h-0 flex-col justify-end gap-1 text-left text-xs font-medium text-zinc-500">
+                Year
+                <select
+                  className={`${controlBox} tabular-nums`}
+                  value={spendYear}
+                  onChange={(e) => onSpendYearChange(Number(e.target.value))}
+                >
+                  {yearSelectOptions.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="flex min-h-0 flex-col justify-end gap-1 text-left text-xs font-medium text-zinc-500">
                 Start date
                 <input
                   type="date"
-                  className={dateInputClass}
+                  className={controlBox}
                   value={customRangeFrom}
                   onChange={(e) => onCustomFromChange(e.target.value)}
                 />
               </label>
-              <label className="flex min-w-[140px] flex-1 flex-col gap-1 text-xs font-medium text-zinc-500 sm:max-w-[200px]">
+              <label className="flex min-h-0 flex-col justify-end gap-1 text-left text-xs font-medium text-zinc-500">
                 End date
                 <input
                   type="date"
-                  className={dateInputClass}
+                  className={controlBox}
                   value={customRangeTo}
                   onChange={(e) => onCustomToChange(e.target.value)}
                 />
               </label>
-            </div>
-            <p className="text-xs leading-snug text-zinc-500 dark:text-zinc-400">
-              Uses start of the first day through end of the last day. If start is
-              after end, the range is swapped automatically.
-            </p>
-          </div>
-        )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
