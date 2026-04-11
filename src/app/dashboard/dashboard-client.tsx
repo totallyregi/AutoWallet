@@ -99,7 +99,8 @@ function DashboardClientImpl({
   );
 
   const [spendYear, setSpendYear] = useState(() => new Date().getFullYear());
-  const [spendMonth, setSpendMonth] = useState(() => new Date().getMonth() + 1);
+  /** `null` = entire selected year; number 1–12 = that calendar month only. */
+  const [spendMonth, setSpendMonth] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<TransactionJson[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -143,6 +144,11 @@ function DashboardClientImpl({
   const MAX_BATCH_SELECTION = 10;
 
   const range = useMemo(() => {
+    if (spendMonth == null) {
+      const from = new Date(spendYear, 0, 1, 0, 0, 0, 0);
+      const to = new Date(spendYear, 11, 31, 23, 59, 59, 999);
+      return { from: from.toISOString(), to: to.toISOString() };
+    }
     const from = new Date(spendYear, spendMonth - 1, 1, 0, 0, 0, 0);
     const to = new Date(spendYear, spendMonth, 0, 23, 59, 59, 999);
     return { from: from.toISOString(), to: to.toISOString() };
@@ -685,17 +691,22 @@ function DashboardClientImpl({
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                Spending totals and charts use the calendar month you select below.
+                Totals use the full year by default. Pick a month to zoom in, or
+                choose &quot;All months&quot; to return to the yearly view.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
                 Month
                 <select
-                  className="h-10 min-w-[140px] rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-                  value={spendMonth}
-                  onChange={(e) => setSpendMonth(Number(e.target.value))}
+                  className="h-10 min-w-[160px] rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                  value={spendMonth ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSpendMonth(v === "" ? null : Number(v));
+                  }}
                 >
+                  <option value="">All months</option>
                   {MONTH_OPTIONS.map((m) => (
                     <option key={m.value} value={m.value}>
                       {m.label}
@@ -908,10 +919,14 @@ function DashboardClientImpl({
                 <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
                   Month
                   <select
-                    className="h-9 min-w-[130px] rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-                    value={spendMonth}
-                    onChange={(e) => setSpendMonth(Number(e.target.value))}
+                    className="h-9 min-w-[150px] rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                    value={spendMonth ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSpendMonth(v === "" ? null : Number(v));
+                    }}
                   >
+                    <option value="">All months</option>
                     {MONTH_OPTIONS.map((m) => (
                       <option key={m.value} value={m.value}>
                         {m.label}
