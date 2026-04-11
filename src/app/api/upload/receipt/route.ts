@@ -11,6 +11,32 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+const MAX_RECEIPT_BYTES = 12 * 1024 * 1024; // 12 MB — PDFs can be larger than photos
+
+function mimeFromUpload(file: File | Blob): string {
+  if (file.type && file.type !== "application/octet-stream") {
+    return file.type;
+  }
+  const name =
+    file instanceof File && typeof file.name === "string"
+      ? file.name.toLowerCase()
+      : "";
+  if (name.endsWith(".pdf")) return "application/pdf";
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".webp")) return "image/webp";
+  if (name.endsWith(".gif")) return "image/gif";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".heic") || name.endsWith(".heif")) return "image/heic";
+  return "image/jpeg";
+}
+
+function isAllowedReceiptMime(mime: string): boolean {
+  const m = mime.toLowerCase();
+  if (m === "application/pdf") return true;
+  if (m.startsWith("image/")) return true;
+  return false;
+}
+
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -24,7 +50,23 @@ export async function POST(req: NextRequest) {
   }
 
   const buf = Buffer.from(await file.arrayBuffer());
-  const mime = file.type || "image/jpeg";
+  if (buf.length > MAX_RECEIPT_BYTES) {
+    return NextResponse.json(
+      { error: "File too large. Maximum size is 12 MB." },
+      { status: 400 },
+    );
+  }
+
+  const mime = mimeFromUpload(file);
+  if (!isAllowedReceiptMime(mime)) {
+    return NextResponse.json(
+      {
+        error:
+          "Unsupported file type. Use a photo (e.g. JPEG, PNG, WebP) or a PDF receipt.",
+      },
+      { status: 400 },
+    );
+  }
 
   let imageUrl: string | null = null;
   const token = process.env.BLOB_READ_WRITE_TOKEN;

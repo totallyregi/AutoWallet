@@ -3,13 +3,18 @@
 import type { GmailFullMessagePreview } from "@/lib/gmail-sync";
 import type { TransactionJson } from "@/lib/transaction-json";
 import { EmailBodyPreviewDialog } from "./email-body-preview-dialog";
-import { GmailBatchParseModal, type BatchParseResultRow } from "./gmail-batch-parse-modal";
+import {
+  ParseJobModal,
+  type ParseJobConfig,
+  type ParseJobResultLine,
+  type ParseJobResultRow,
+} from "./parse-job-modal";
 import { GmailFilters } from "./gmail-filters";
 import { GmailMessagesPreview } from "./gmail-messages-preview";
 import type { GmailConnectionState, GmailTableRow } from "./gmail-types";
 import { TransactionEditModal, type CategoryOption } from "./transaction-edit-modal";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Cell,
   Pie,
@@ -60,6 +65,21 @@ const MONTH_OPTIONS = [
 const SPEND_FILTER_STORAGE_KEY = "finance-tracker:spendFilter";
 /** Inclusive rolling window ending at the current calendar year. */
 const SPEND_YEAR_WINDOW = 10;
+
+const MAX_CAPTURE_RECEIPTS = 5;
+const MAX_RECEIPT_FILE_BYTES = 12 * 1024 * 1024;
+
+function transactionToResultLines(tx: TransactionJson): ParseJobResultLine[] {
+  return [
+    {
+      merchant: tx.merchant,
+      amount: tx.amount,
+      currency: tx.currency,
+      occurredAt: tx.occurredAt,
+      kind: tx.isReversalLine ? "reversal" : "charge",
+    },
+  ];
+}
 
 function spendYearWindowEnd(): number {
   return new Date().getFullYear();
@@ -154,7 +174,11 @@ function DashboardClientImpl({
   const [transactions, setTransactions] = useState<TransactionJson[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
+  const [receiptQueue, setReceiptQueue] = useState<{ id: string; file: File }[]>(
+    [],
+  );
+  const [receiptParseBusy, setReceiptParseBusy] = useState(false);
+  const receiptFileInputRef = useRef<HTMLInputElement>(null);
   const [pasteText, setPasteText] = useState("");
   const [pasteBusy, setPasteBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -179,8 +203,10 @@ function DashboardClientImpl({
   const [batchDone, setBatchDone] = useState(0);
   const [batchTotal, setBatchTotal] = useState(0);
   const [batchCurrentLabel, setBatchCurrentLabel] = useState<string>("");
-  const [batchResults, setBatchResults] = useState<BatchParseResultRow[]>([]);
-  const [batchModalRows, setBatchModalRows] = useState<GmailTableRow[]>([]);
+  const [batchResults, setBatchResults] = useState<ParseJobResultRow[]>([]);
+  const [batchParseJob, setBatchParseJob] = useState<ParseJobConfig | null>(
+    null,
+  );
   const [forceOpenEmailId, setForceOpenEmailId] = useState<string | null>(null);
   const [sourceEmailTxId, setSourceEmailTxId] = useState<string | null>(null);
   const [sourceEmailLoading, setSourceEmailLoading] = useState(false);
@@ -404,50 +430,200 @@ function DashboardClientImpl({
     })();
   }, [fetchGmailMessagesPage]);
 
-  async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
+  function isAllowedReceiptFile(file: File): boolean {
+    const name = file.name.toLowerCase();
+    return (
+      file.type.startsWith("image/") ||
+      file.type === "application/pdf" ||
+      name.endsWith(".pdf")
+    );
+  }
+
+  function onReceiptFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const list = e.target.files;
+    if (!list?.length) return;
     setMessage(null);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/upload/receipt", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Upload failed");
-      setMessage("Receipt processed and saved.");
-      await load();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-      e.target.value = "";
+    let notice: string | null = null;
+    setReceiptQueue((prev) => {
+      const next = [...prev];
+      for (const file of Array.from(list)) {
+        if (next.length >= MAX_CAPTURE_RECEIPTS) {
+          notice = `You can stage at most ${MAX_CAPTURE_RECEIPTS} files. Extra files were not added.`;
+          break;
+        }
+        if (!isAllowedReceiptFile(file)) {
+          notice = "Skipped a file that is not an image or PDF.";
+          continue;
+        }
+        if (file.size > MAX_RECEIPT_FILE_BYTES) {
+          notice = `Skipped "${file.name}" (larger than 12 MB).`;
+          continue;
+        }
+        next.push({
+          id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          file,
+        });
+      }
+      return next;
+    });
+    if (notice) setMessage(notice);
+    e.target.value = "";
+  }
+
+  function removeQueuedReceipt(id: string) {
+    setReceiptQueue((q) => q.filter((x) => x.id !== id));
+  }
+
+  async function runReceiptParseJob() {
+    const queued = receiptQueue;
+    if (queued.length === 0) return;
+    const files = queued.map((q) => q.file);
+    const sources = files.map((file, i) => {
+      const id = `receipt-${Date.now()}-${i}`;
+      const name = file.name.toLowerCase();
+      const isPdf = file.type === "application/pdf" || name.endsWith(".pdf");
+      return {
+        id,
+        name: file.name,
+        previewUrl: URL.createObjectURL(file),
+        isPdf,
+      };
+    });
+    const job: ParseJobConfig = { kind: "receipt", sources };
+    setBatchParseJob(job);
+    setBatchModalOpen(true);
+    setBatchRunning(true);
+    setBatchDone(0);
+    setBatchTotal(files.length);
+    setBatchResults([]);
+    setBatchCurrentLabel("");
+    setMessage(null);
+    setReceiptParseBusy(true);
+
+    const results: ParseJobResultRow[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]!;
+      const src = sources[i]!;
+      setBatchCurrentLabel(src.name);
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        const res = await fetch("/api/upload/receipt", { method: "POST", body: fd });
+        const data = (await res.json()) as {
+          error?: string;
+          transaction?: TransactionJson;
+        };
+        if (!res.ok) throw new Error(data.error ?? "Upload failed");
+        const tx = data.transaction;
+        if (!tx) throw new Error("No transaction returned");
+        const lines = transactionToResultLines(tx);
+        results.push({
+          sourceId: src.id,
+          title: src.name,
+          status: "parsed",
+          createdCount: 1,
+          lineCount: 1,
+          createdTransactions: lines,
+        });
+      } catch (err) {
+        results.push({
+          sourceId: src.id,
+          title: src.name,
+          status: "error",
+          error: err instanceof Error ? err.message : "Failed to parse",
+        });
+      } finally {
+        setBatchDone(i + 1);
+        setBatchResults([...results]);
+      }
+    }
+    setBatchRunning(false);
+    setBatchCurrentLabel("");
+    setReceiptParseBusy(false);
+    await load({ preserveMessage: true });
+    const ok = results.filter((r) => r.status !== "error").length;
+    if (files.length === 1) {
+      const r = results[0]!;
+      setMessage(
+        r.status === "error"
+          ? (r.error ?? "Failed to parse receipt")
+          : "Receipt saved.",
+      );
+    } else {
+      setMessage(`Receipt parse complete: ${ok}/${results.length} succeeded.`);
     }
   }
 
-  async function onPaste(e: React.FormEvent) {
-    e.preventDefault();
-    if (!pasteText.trim()) return;
-    setPasteBusy(true);
+  async function runTextParseJob(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const job: ParseJobConfig = { kind: "text", pastedText: trimmed };
+    setBatchParseJob(job);
+    setBatchModalOpen(true);
+    setBatchRunning(true);
+    setBatchDone(0);
+    setBatchTotal(1);
+    setBatchResults([]);
+    setBatchCurrentLabel("Pasted content");
     setMessage(null);
+    setPasteBusy(true);
+
+    const sourceId = "paste-text";
+    const results: ParseJobResultRow[] = [];
     try {
       const res = await fetch("/api/ingest/paste", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: pasteText }),
+        body: JSON.stringify({ text: trimmed }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Paste failed");
-      setMessage(
-        data.duplicate ? "That text was already imported." : "Email text imported.",
-      );
-      setPasteText("");
-      await load();
+      const data = (await res.json()) as {
+        error?: string;
+        duplicate?: boolean;
+        transaction?: TransactionJson;
+      };
+      if (!res.ok) throw new Error(data.error ?? "Parse failed");
+      const dup = Boolean(data.duplicate);
+      const tx = data.transaction;
+      if (!tx) throw new Error("No transaction returned");
+      const lines = transactionToResultLines(tx);
+      results.push({
+        sourceId,
+        title: "Pasted content",
+        status: dup ? "duplicate" : "parsed",
+        createdCount: dup ? 0 : 1,
+        lineCount: 1,
+        createdTransactions: lines,
+      });
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Paste failed");
+      results.push({
+        sourceId,
+        title: "Pasted content",
+        status: "error",
+        error: err instanceof Error ? err.message : "Failed to parse",
+      });
     } finally {
+      setBatchDone(1);
+      setBatchResults(results);
+      setBatchRunning(false);
+      setBatchCurrentLabel("");
       setPasteBusy(false);
+      await load({ preserveMessage: true });
+      const r = results[0]!;
+      if (r.status === "error") {
+        setMessage(r.error ?? "Failed to parse");
+      } else if (r.status === "duplicate") {
+        setMessage("That text was already imported.");
+        setPasteText("");
+      } else {
+        setMessage("Text parsed and saved.");
+        setPasteText("");
+      }
     }
+  }
+
+  function onPasteSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    void runTextParseJob(pasteText);
   }
 
   async function onSaveSender(e: React.FormEvent) {
@@ -530,7 +706,12 @@ function DashboardClientImpl({
     options: { clearSelectionAfter: boolean },
   ) {
     if (rows.length === 0) return;
-    setBatchModalRows(rows);
+    const gmailJob: ParseJobConfig = {
+      kind: "gmail",
+      rows,
+      onOpenEmail: (gmailMessageId) => setForceOpenEmailId(gmailMessageId),
+    };
+    setBatchParseJob(gmailJob);
     setBatchModalOpen(true);
     setBatchRunning(true);
     setBatchDone(0);
@@ -539,20 +720,20 @@ function DashboardClientImpl({
     setBatchCurrentLabel("");
     setMessage(null);
 
-    const results: BatchParseResultRow[] = [];
+    const results: ParseJobResultRow[] = [];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!;
       setParseBusyId(row.gmailMessageId);
       setBatchCurrentLabel(row.subject || row.from || "Email");
       try {
         const data = await parseEmailById(row.gmailMessageId);
-        const status: BatchParseResultRow["status"] = data.duplicate
+        const status: ParseJobResultRow["status"] = data.duplicate
           ? "duplicate"
           : "parsed";
         results.push({
-          gmailMessageId: row.gmailMessageId,
-          subject: row.subject,
-          from: row.from,
+          sourceId: row.gmailMessageId,
+          title: row.subject,
+          subtitle: row.from,
           status,
           createdCount: data.createdCount ?? 0,
           lineCount: data.lineCount ?? data.createdCount ?? 0,
@@ -572,9 +753,9 @@ function DashboardClientImpl({
         );
       } catch (e) {
         results.push({
-          gmailMessageId: row.gmailMessageId,
-          subject: row.subject,
-          from: row.from,
+          sourceId: row.gmailMessageId,
+          title: row.subject,
+          subtitle: row.from,
           status: "error",
           error: e instanceof Error ? e.message : "Failed to parse",
         });
@@ -959,37 +1140,73 @@ function DashboardClientImpl({
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
               <h2 className="mb-3 text-lg font-medium">Upload receipt</h2>
               <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
-                Photo or screenshot — Gemini reads amount and merchant.
+                Add a photo, screenshot, or PDF — each file is parsed to create a
+                transaction. Up to {MAX_CAPTURE_RECEIPTS} files at once, 12 MB each.
               </p>
-              <label className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-300 px-4 py-8 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900/50">
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  disabled={uploading}
-                  onChange={onUpload}
-                />
-                {uploading ? "Processing…" : "Choose image"}
-              </label>
+              <div className="flex flex-col gap-3">
+                <label className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-300 px-4 py-6 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900/50">
+                  <input
+                    ref={receiptFileInputRef}
+                    type="file"
+                    accept="image/*,application/pdf,.pdf"
+                    multiple
+                    className="hidden"
+                    disabled={receiptParseBusy || batchRunning}
+                    onChange={onReceiptFilesSelected}
+                  />
+                  Choose file(s)
+                </label>
+                {receiptQueue.length > 0 && (
+                  <ul className="space-y-1.5 text-sm">
+                    {receiptQueue.map((q) => (
+                      <li
+                        key={q.id}
+                        className="flex items-center justify-between gap-2 rounded-md border border-zinc-200 px-2 py-1.5 dark:border-zinc-800"
+                      >
+                        <span className="min-w-0 truncate">{q.file.name}</span>
+                        <button
+                          type="button"
+                          className="shrink-0 rounded border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
+                          disabled={receiptParseBusy || batchRunning}
+                          onClick={() => removeQueuedReceipt(q.id)}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <button
+                  type="button"
+                  disabled={
+                    receiptQueue.length === 0 || receiptParseBusy || batchRunning
+                  }
+                  onClick={() => void runReceiptParseJob()}
+                  className="h-10 rounded-lg bg-zinc-900 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
+                >
+                  {receiptParseBusy ? "Parsing…" : "Parse"}
+                </button>
+              </div>
             </div>
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <h2 className="mb-3 text-lg font-medium">Paste bank email</h2>
+              <h2 className="mb-3 text-lg font-medium">Paste email or message text</h2>
               <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
-                Paste notification text for testing without webhook forwarding.
+                Paste a bank email, notification, or any text receipt (for example
+                from messages). The text is parsed to create a transaction.
               </p>
-              <form onSubmit={onPaste} className="flex flex-col gap-3">
+              <form onSubmit={onPasteSubmit} className="flex flex-col gap-3">
                 <textarea
                   className="min-h-[120px] w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-                  placeholder="Subject: …"
+                  placeholder="Subject: … or paste notification text"
                   value={pasteText}
                   onChange={(e) => setPasteText(e.target.value)}
                 />
                 <button
                   type="submit"
-                  disabled={pasteBusy}
+                  disabled={pasteBusy || !pasteText.trim() || batchRunning}
                   className="h-10 rounded-lg bg-zinc-900 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
                 >
-                  {pasteBusy ? "Importing…" : "Import from text"}
+                  {pasteBusy ? "Parsing…" : "Parse"}
                 </button>
               </form>
             </div>
@@ -1139,19 +1356,25 @@ function DashboardClientImpl({
           </section>
         )}
       </div>
-      <GmailBatchParseModal
+      <ParseJobModal
         open={batchModalOpen}
         running={batchRunning}
         done={batchDone}
         total={batchTotal}
         currentLabel={batchCurrentLabel}
         results={batchResults}
-        selectedRows={batchModalRows}
+        job={batchParseJob}
         onClose={() => {
-          if (!batchRunning) setBatchModalOpen(false);
-        }}
-        onOpenEmail={(gmailMessageId) => {
-          setForceOpenEmailId(gmailMessageId);
+          if (batchRunning) return;
+          setBatchParseJob((job) => {
+            if (job?.kind === "receipt") {
+              for (const s of job.sources) URL.revokeObjectURL(s.previewUrl);
+            }
+            return null;
+          });
+          setBatchModalOpen(false);
+          setReceiptQueue([]);
+          if (receiptFileInputRef.current) receiptFileInputRef.current.value = "";
         }}
       />
       <EmailBodyPreviewDialog

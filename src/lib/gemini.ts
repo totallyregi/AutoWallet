@@ -259,7 +259,7 @@ export async function extractTransactionFromImageBuffer(
   mimeType: string,
 ): Promise<ExtractedTransaction> {
   const model = getModel();
-  const prompt = `${EXTRACTION_INSTRUCTION}\n\nThe image is a receipt or payment screenshot. Extract the main total paid.`;
+  const prompt = `${EXTRACTION_INSTRUCTION}\n\nThe file is a receipt photo, screenshot, or PDF. Extract the main total paid.`;
   let result;
   const parts = [
     { text: prompt },
