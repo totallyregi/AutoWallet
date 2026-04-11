@@ -57,6 +57,55 @@ const MONTH_OPTIONS = [
   { value: 12, label: "December" },
 ] as const;
 
+const SPEND_FILTER_STORAGE_KEY = "finance-tracker:spendFilter";
+/** Inclusive rolling window ending at the current calendar year. */
+const SPEND_YEAR_WINDOW = 10;
+
+function spendYearWindowEnd(): number {
+  return new Date().getFullYear();
+}
+
+function selectableSpendYears(): number[] {
+  const end = spendYearWindowEnd();
+  return Array.from({ length: SPEND_YEAR_WINDOW }, (_, i) => end - i);
+}
+
+function clampYearToSelectableWindow(year: number): number {
+  const end = spendYearWindowEnd();
+  const min = end - (SPEND_YEAR_WINDOW - 1);
+  return Math.min(end, Math.max(min, Math.round(year)));
+}
+
+function readStoredSpendFilter(): { year: number; month: number | null } {
+  const end = spendYearWindowEnd();
+  const defaultYear = end;
+  if (typeof window === "undefined") {
+    return { year: defaultYear, month: null };
+  }
+  try {
+    const raw = localStorage.getItem(SPEND_FILTER_STORAGE_KEY);
+    if (!raw) return { year: defaultYear, month: null };
+    const parsed = JSON.parse(raw) as { year?: unknown; month?: unknown };
+    const rawYear =
+      typeof parsed.year === "number" && Number.isFinite(parsed.year)
+        ? parsed.year
+        : defaultYear;
+    const year = clampYearToSelectableWindow(rawYear);
+    const month =
+      parsed.month === null
+        ? null
+        : typeof parsed.month === "number" &&
+            Number.isInteger(parsed.month) &&
+            parsed.month >= 1 &&
+            parsed.month <= 12
+          ? parsed.month
+          : null;
+    return { year, month };
+  } catch {
+    return { year: defaultYear, month: null };
+  }
+}
+
 type Summary = {
   total: number;
   byCategory: {
@@ -98,9 +147,10 @@ function DashboardClientImpl({
     [router, pathname, searchParams],
   );
 
-  const [spendYear, setSpendYear] = useState(() => new Date().getFullYear());
+  const [spendYear, setSpendYear] = useState(() => spendYearWindowEnd());
   /** `null` = entire selected year; number 1–12 = that calendar month only. */
   const [spendMonth, setSpendMonth] = useState<number | null>(null);
+  const [spendFilterReady, setSpendFilterReady] = useState(false);
   const [transactions, setTransactions] = useState<TransactionJson[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -143,6 +193,27 @@ function DashboardClientImpl({
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
   const MAX_BATCH_SELECTION = 10;
 
+  const yearSelectOptions = useMemo(() => selectableSpendYears(), []);
+
+  useEffect(() => {
+    const { year, month } = readStoredSpendFilter();
+    setSpendYear(year);
+    setSpendMonth(month);
+    setSpendFilterReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!spendFilterReady) return;
+    try {
+      localStorage.setItem(
+        SPEND_FILTER_STORAGE_KEY,
+        JSON.stringify({ year: spendYear, month: spendMonth }),
+      );
+    } catch {
+      // ignore private mode / quota
+    }
+  }, [spendFilterReady, spendYear, spendMonth]);
+
   const range = useMemo(() => {
     if (spendMonth == null) {
       const from = new Date(spendYear, 0, 1, 0, 0, 0, 0);
@@ -155,6 +226,23 @@ function DashboardClientImpl({
   }, [spendYear, spendMonth]);
 
   const gmailRows = gmailPages[gmailPageIndex] ?? [];
+
+  useEffect(() => {
+    const pool = gmailPages.flat();
+    setSelectedMessages((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of Object.keys(next)) {
+        const fresh = pool.find((r) => r.gmailMessageId === id);
+        if (fresh && fresh.parseStatus === "complete") {
+          delete next[id];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [gmailPages]);
+
   const selectedMessageIds = useMemo(
     () => Object.keys(selectedMessages),
     [selectedMessages],
@@ -532,7 +620,13 @@ function DashboardClientImpl({
     void runGmailParseJob([row], { clearSelectionAfter: false });
   }
 
+  /** Only fully tracked (complete) rows are excluded; open + partial stay selectable for batch parse. */
+  function isSelectableForBatchParse(row: GmailTableRow): boolean {
+    return (row.parseStatus ?? "open") !== "complete";
+  }
+
   function onToggleSelected(row: GmailTableRow, checked: boolean) {
+    if (checked && !isSelectableForBatchParse(row)) return;
     setSelectedMessages((prev) => {
       const next = { ...prev };
       if (checked) {
@@ -547,13 +641,14 @@ function DashboardClientImpl({
   }
 
   function onToggleSelectPage(rows: GmailTableRow[], checked: boolean) {
+    const selectable = rows.filter(isSelectableForBatchParse);
     setSelectedMessages((prev) => {
       const next = { ...prev };
       if (!checked) {
         for (const r of rows) delete next[r.gmailMessageId];
         return next;
       }
-      for (const r of rows) {
+      for (const r of selectable) {
         if (Object.keys(next).length >= MAX_BATCH_SELECTION) break;
         if (!next[r.gmailMessageId]) next[r.gmailMessageId] = r;
       }
@@ -716,21 +811,17 @@ function DashboardClientImpl({
               </label>
               <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
                 Year
-                <input
-                  type="number"
-                  min={2000}
-                  max={2100}
-                  className="h-10 w-24 rounded-lg border border-zinc-300 bg-white px-3 text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+                <select
+                  className="h-10 min-w-[100px] rounded-lg border border-zinc-300 bg-white px-3 text-sm tabular-nums text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                   value={spendYear}
-                  onChange={(e) =>
-                    setSpendYear(
-                      Math.min(
-                        2100,
-                        Math.max(2000, Number(e.target.value) || spendYear),
-                      ),
-                    )
-                  }
-                />
+                  onChange={(e) => setSpendYear(Number(e.target.value))}
+                >
+                  {yearSelectOptions.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
           </header>
@@ -936,21 +1027,17 @@ function DashboardClientImpl({
                 </label>
                 <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
                   Year
-                  <input
-                    type="number"
-                    min={2000}
-                    max={2100}
-                    className="h-9 w-20 rounded-lg border border-zinc-300 bg-white px-2 text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+                  <select
+                    className="h-9 min-w-[92px] rounded-lg border border-zinc-300 bg-white px-2 text-sm tabular-nums text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                     value={spendYear}
-                    onChange={(e) =>
-                      setSpendYear(
-                        Math.min(
-                          2100,
-                          Math.max(2000, Number(e.target.value) || spendYear),
-                        ),
-                      )
-                    }
-                  />
+                    onChange={(e) => setSpendYear(Number(e.target.value))}
+                  >
+                    {yearSelectOptions.map((y) => (
+                      <option key={y} value={y}>
+                        {y}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </div>
             </div>

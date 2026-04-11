@@ -113,11 +113,19 @@ export function GmailMessagesPreview({
     rows,
   ]);
 
-  const selectedOnPage = rows.filter((m) =>
+  /** Partially parsed emails remain selectable so user can finish parsing. */
+  const isSelectableForBatch = (m: GmailTableRow) =>
+    (m.parseStatus ?? "open") !== "complete";
+
+  const selectableOnPage = rows.filter(isSelectableForBatch);
+  const selectedSelectableOnPage = selectableOnPage.filter((m) =>
     selectedMessageIds.includes(m.gmailMessageId),
   );
-  const allPageSelected = rows.length > 0 && selectedOnPage.length === rows.length;
-  const somePageSelected = selectedOnPage.length > 0 && !allPageSelected;
+  const allPageSelected =
+    selectableOnPage.length > 0 &&
+    selectedSelectableOnPage.length === selectableOnPage.length;
+  const somePageSelected =
+    selectedSelectableOnPage.length > 0 && !allPageSelected;
   const atBatchLimit = selectedMessageIds.length >= maxBatchSelection;
 
   return (
@@ -320,8 +328,9 @@ export function GmailMessagesPreview({
                         type="checkbox"
                         checked={selectedMessageIds.includes(m.gmailMessageId)}
                         disabled={
-                          !selectedMessageIds.includes(m.gmailMessageId) &&
-                          atBatchLimit
+                          !isSelectableForBatch(m) ||
+                          (!selectedMessageIds.includes(m.gmailMessageId) &&
+                            atBatchLimit)
                         }
                         onChange={(e) => onToggleSelected(m, e.target.checked)}
                         aria-label={`Select ${m.subject || "email"}`}
