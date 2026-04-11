@@ -1211,7 +1211,7 @@ function DashboardClientImpl({
     }`;
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[250px_minmax(0,1fr)]">
+    <div className="grid items-start gap-6 xl:grid-cols-[250px_minmax(0,1fr)]">
       <aside className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 xl:sticky xl:top-6 xl:h-fit">
         <p className="px-3 pb-3 pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
           Workspace
@@ -1230,31 +1230,47 @@ function DashboardClientImpl({
         </nav>
       </aside>
 
-      <div className="space-y-6">
-        {activeTab === "overview" && (
-          <header className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                Totals follow the date range below: use month and year for a quick
-                view, or switch to custom start and end dates for a specific window.
-              </p>
+      <div className="min-w-0 space-y-6">
+        {(activeTab === "overview" || activeTab === "transactions") && (
+          <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
+              <div className="shrink-0 lg:max-w-[220px]">
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Date range
+                </p>
+                <p className="mt-1 text-sm tabular-nums text-zinc-600 dark:text-zinc-400">
+                  {new Date(range.from).toLocaleDateString()} —{" "}
+                  {new Date(range.to).toLocaleDateString()}
+                </p>
+              </div>
+              <div className="min-w-0 w-full lg:max-w-2xl lg:flex-1">
+                <DateRangeControls
+                  variant="transactions"
+                  dateRangeMode={dateRangeMode}
+                  onDateRangeModeChange={handleDateRangeModeChange}
+                  spendMonth={spendMonth}
+                  spendYear={spendYear}
+                  onSpendMonthChange={setSpendMonth}
+                  onSpendYearChange={setSpendYear}
+                  customRangeFrom={customRangeFrom}
+                  customRangeTo={customRangeTo}
+                  onCustomFromChange={setCustomRangeFrom}
+                  onCustomToChange={setCustomRangeTo}
+                  yearSelectOptions={yearSelectOptions}
+                  monthOptions={MONTH_OPTIONS}
+                />
+              </div>
             </div>
-            <DateRangeControls
-              variant="overview"
-              dateRangeMode={dateRangeMode}
-              onDateRangeModeChange={handleDateRangeModeChange}
-              spendMonth={spendMonth}
-              spendYear={spendYear}
-              onSpendMonthChange={setSpendMonth}
-              onSpendYearChange={setSpendYear}
-              customRangeFrom={customRangeFrom}
-              customRangeTo={customRangeTo}
-              onCustomFromChange={setCustomRangeFrom}
-              onCustomToChange={setCustomRangeTo}
-              yearSelectOptions={yearSelectOptions}
-              monthOptions={MONTH_OPTIONS}
-            />
+          </div>
+        )}
+
+        {activeTab === "overview" && (
+          <header className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+              Totals and charts below use the date range above. Switch tabs to
+              Transactions to filter and sort individual rows.
+            </p>
           </header>
         )}
 
@@ -1466,29 +1482,11 @@ function DashboardClientImpl({
         {activeTab === "transactions" && (
           <section className="fade-slide-in rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
             <div className="flex flex-col gap-4 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <h2 className="text-lg font-medium">Transactions</h2>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    {new Date(range.from).toLocaleDateString()} —{" "}
-                    {new Date(range.to).toLocaleDateString()}
-                  </p>
-                </div>
-                <DateRangeControls
-                  variant="transactions"
-                  dateRangeMode={dateRangeMode}
-                  onDateRangeModeChange={handleDateRangeModeChange}
-                  spendMonth={spendMonth}
-                  spendYear={spendYear}
-                  onSpendMonthChange={setSpendMonth}
-                  onSpendYearChange={setSpendYear}
-                  customRangeFrom={customRangeFrom}
-                  customRangeTo={customRangeTo}
-                  onCustomFromChange={setCustomRangeFrom}
-                  onCustomToChange={setCustomRangeTo}
-                  yearSelectOptions={yearSelectOptions}
-                  monthOptions={MONTH_OPTIONS}
-                />
+              <div>
+                <h2 className="text-lg font-medium">Transactions</h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Date range is set in the card above. Use filters to narrow this list.
+                </p>
               </div>
               <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/30">
                 <div className="flex flex-wrap items-center justify-between gap-2">
