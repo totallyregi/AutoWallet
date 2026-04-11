@@ -1,6 +1,11 @@
 import { auth } from "@/auth";
+import {
+  VOIDED_BY_PRIOR_REVERSAL_SUBSTRING,
+  VOIDED_BY_SUBSEQUENT_REVERSAL_SUBSTRING,
+} from "@/lib/reversal-constants";
 import prisma from "@/lib/prisma";
 import { transactionToJson } from "@/lib/transaction-json";
+import type { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(req: NextRequest) {
@@ -13,17 +18,39 @@ export async function GET(req: NextRequest) {
   const from = searchParams.get("from");
   const to = searchParams.get("to");
 
-  const where: {
-    userId: string;
-    excludedFromSpend: boolean;
-    occurredAt?: { gte?: Date; lte?: Date };
-  } = { userId: session.user.id, excludedFromSpend: false };
+  const dateFilter: Prisma.TransactionWhereInput | undefined =
+    from || to
+      ? {
+          occurredAt: {
+            ...(from ? { gte: new Date(from) } : {}),
+            ...(to ? { lte: new Date(to) } : {}),
+          },
+        }
+      : undefined;
 
-  if (from || to) {
-    where.occurredAt = {};
-    if (from) where.occurredAt.gte = new Date(from);
-    if (to) where.occurredAt.lte = new Date(to);
-  }
+  const voidedEmailCharge: Prisma.TransactionWhereInput = {
+    AND: [
+      { excludedFromSpend: true },
+      { source: "email" },
+      { isReversalLine: false },
+      {
+        OR: [
+          { notes: { contains: VOIDED_BY_PRIOR_REVERSAL_SUBSTRING } },
+          { notes: { contains: VOIDED_BY_SUBSEQUENT_REVERSAL_SUBSTRING } },
+        ],
+      },
+    ],
+  };
+
+  const where: Prisma.TransactionWhereInput = {
+    userId: session.user.id,
+    AND: [
+      ...(dateFilter ? [dateFilter] : []),
+      {
+        OR: [{ excludedFromSpend: false }, voidedEmailCharge],
+      },
+    ],
+  };
 
   const transactions = await prisma.transaction.findMany({
     where,

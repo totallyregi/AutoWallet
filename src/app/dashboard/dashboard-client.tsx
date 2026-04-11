@@ -975,6 +975,11 @@ function DashboardClientImpl({
                         </td>
                         <td className="px-4 py-3">
                           {tx.merchant ?? "—"}
+                          {tx.displayAsReversed && (
+                            <span className="ml-2 rounded bg-violet-100 px-1.5 py-0.5 text-xs font-medium text-violet-900 dark:bg-violet-900/40 dark:text-violet-200">
+                              Reversed
+                            </span>
+                          )}
                           {tx.needsReview && (
                             <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
                               review
@@ -982,8 +987,21 @@ function DashboardClientImpl({
                           )}
                         </td>
                         <td className="px-4 py-3">{tx.category?.name ?? "—"}</td>
-                        <td className="px-4 py-3 capitalize text-zinc-600 dark:text-zinc-400">
-                          {tx.source}
+                        <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
+                          {tx.source === "email" &&
+                          tx.externalId?.startsWith("email:") ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void openSourceEmailForTransaction(tx.id)
+                              }
+                              className="text-sm font-medium text-sky-600 underline decoration-sky-600/40 underline-offset-2 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
+                            >
+                              Email
+                            </button>
+                          ) : (
+                            <span className="text-sm capitalize">{tx.source}</span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-right font-medium tabular-nums">
                           {new Intl.NumberFormat(undefined, {
@@ -992,33 +1010,23 @@ function DashboardClientImpl({
                           }).format(tx.amount)}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          {tx.source === "email" &&
-                            tx.externalId?.startsWith("email:") && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void openSourceEmailForTransaction(tx.id)
-                                }
-                                className="mr-2 h-8 rounded-md border border-sky-300 px-2.5 text-xs font-medium text-sky-800 hover:bg-sky-50 dark:border-sky-700/60 dark:text-sky-200 dark:hover:bg-sky-950/40"
-                              >
-                                Source email
-                              </button>
-                            )}
-                          <button
-                            type="button"
-                            onClick={() => setEditTx(tx)}
-                            className="mr-2 h-8 rounded-md border border-zinc-300 px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900/40"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            disabled={deleteBusyId === tx.id}
-                            onClick={() => void onDeleteTransaction(tx.id)}
-                            className="h-8 rounded-md border border-red-300 px-3 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800/60 dark:text-red-300 dark:hover:bg-red-900/20"
-                          >
-                            {deleteBusyId === tx.id ? "Deleting..." : "Delete"}
-                          </button>
+                          <div className="inline-flex flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditTx(tx)}
+                              className="h-8 rounded-md border border-zinc-300 px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900/40"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              disabled={deleteBusyId === tx.id}
+                              onClick={() => void onDeleteTransaction(tx.id)}
+                              className="h-8 rounded-md border border-red-300 px-3 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800/60 dark:text-red-300 dark:hover:bg-red-900/20"
+                            >
+                              {deleteBusyId === tx.id ? "Deleting..." : "Delete"}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))

@@ -4,6 +4,9 @@ import {
   refreshEmailParseSnapshot,
   normalizeRfcMessageId,
 } from "@/lib/email-parse-snapshot";
+import {
+  VOIDED_BY_PRIOR_REVERSAL_SUBSTRING,
+} from "@/lib/reversal-constants";
 import type { ExtractedEmailLine } from "@/lib/extraction-schema";
 import prisma from "@/lib/prisma";
 import {
@@ -501,22 +504,56 @@ export async function parseAndStoreGmailMessage(
     const confidence = extracted.confidence ?? 0.7;
     const needsReview = confidence < 0.6;
 
-    await prisma.transaction.create({
-      data: {
-        userId,
-        amount: extracted.amount,
-        currency: extracted.currency,
-        occurredAt: parseOccurredAt(extracted.date),
-        merchant: extracted.merchant ?? undefined,
-        notes: extracted.notes ?? undefined,
-        source: "email",
-        rawSnippet: combined.slice(0, 4000),
-        externalId,
-        confidence,
-        needsReview,
-        categoryId,
-      },
-    });
+    const orphanRev = await findOrphanEmailReversalByRefSuffix(
+      userId,
+      extracted.referenceId,
+    );
+
+    if (orphanRev) {
+      const voidedNote = `${VOIDED_BY_PRIOR_REVERSAL_SUBSTRING}. Spend excluded.`;
+      await prisma.$transaction(async (db) => {
+        const charge = await db.transaction.create({
+          data: {
+            userId,
+            amount: extracted.amount,
+            currency: extracted.currency,
+            occurredAt: parseOccurredAt(extracted.date),
+            merchant: extracted.merchant ?? undefined,
+            notes: extracted.notes
+              ? `${extracted.notes} | ${voidedNote}`
+              : voidedNote,
+            source: "email",
+            rawSnippet: combined.slice(0, 4000),
+            externalId,
+            confidence,
+            needsReview,
+            categoryId,
+            excludedFromSpend: true,
+          },
+        });
+        await db.transaction.update({
+          where: { id: orphanRev.id },
+          data: { reversesTransactionId: charge.id },
+        });
+      });
+    } else {
+      await prisma.transaction.create({
+        data: {
+          userId,
+          amount: extracted.amount,
+          currency: extracted.currency,
+          occurredAt: parseOccurredAt(extracted.date),
+          merchant: extracted.merchant ?? undefined,
+          notes: extracted.notes ?? undefined,
+          source: "email",
+          rawSnippet: combined.slice(0, 4000),
+          externalId,
+          confidence,
+          needsReview,
+          categoryId,
+        },
+      });
+    }
     createdCount += 1;
     createdTransactions.push({
       merchant: extracted.merchant ?? null,
@@ -539,27 +576,48 @@ export async function parseAndStoreGmailMessage(
   };
 }
 
+function bankRefSuffix(refRaw: string | null | undefined): string | null {
+  const ref = refRaw?.trim();
+  if (!ref) return null;
+  return ref.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 100);
+}
+
 function lineExternalId(
   messageId: string,
   referenceId: string | null | undefined,
   index: number,
 ): string {
   const base = `email:${messageId}`;
-  const ref = referenceId?.trim();
-  if (ref) {
-    const safe = ref.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 100);
-    return `${base}:${safe}`;
-  }
+  const safe = bankRefSuffix(referenceId);
+  if (safe) return `${base}:${safe}`;
   return `${base}:line-${index}`;
+}
+
+/** Reversal row from an earlier email, not yet linked to a charge (same ref suffix). */
+async function findOrphanEmailReversalByRefSuffix(
+  userId: string,
+  refRaw: string | null | undefined,
+): Promise<{ id: string } | null> {
+  const safe = bankRefSuffix(refRaw);
+  if (!safe) return null;
+  return prisma.transaction.findFirst({
+    where: {
+      userId,
+      source: "email",
+      isReversalLine: true,
+      reversesTransactionId: null,
+      externalId: { endsWith: `:${safe}` },
+    },
+    select: { id: true },
+  });
 }
 
 async function findChargeByBankReference(
   userId: string,
   refRaw: string | null | undefined,
 ) {
-  const ref = refRaw?.trim();
-  if (!ref) return null;
-  const safe = ref.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 100);
+  const safe = bankRefSuffix(refRaw);
+  if (!safe) return null;
   return prisma.transaction.findFirst({
     where: {
       userId,
