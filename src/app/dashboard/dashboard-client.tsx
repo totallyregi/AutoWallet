@@ -12,9 +12,18 @@ import {
 import { GmailFilters } from "./gmail-filters";
 import { GmailMessagesPreview } from "./gmail-messages-preview";
 import type { GmailConnectionState, GmailTableRow } from "./gmail-types";
+import { DateRangeControls, type DateRangeMode } from "./date-range-controls";
 import { TransactionEditModal, type CategoryOption } from "./transaction-edit-modal";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Cell,
   Pie,
@@ -96,16 +105,91 @@ function clampYearToSelectableWindow(year: number): number {
   return Math.min(end, Math.max(min, Math.round(year)));
 }
 
-function readStoredSpendFilter(): { year: number; month: number | null } {
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function quickRangeIso(year: number, month: number | null): { from: string; to: string } {
+  if (month == null) {
+    const from = new Date(year, 0, 1, 0, 0, 0, 0);
+    const to = new Date(year, 11, 31, 23, 59, 59, 999);
+    return { from: from.toISOString(), to: to.toISOString() };
+  }
+  const from = new Date(year, month - 1, 1, 0, 0, 0, 0);
+  const to = new Date(year, month, 0, 23, 59, 59, 999);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+function quickRangeToYyyyMmDd(
+  year: number,
+  month: number | null,
+): { from: string; to: string } {
+  if (month == null) {
+    return { from: `${year}-01-01`, to: `${year}-12-31` };
+  }
+  const lastDay = new Date(year, month, 0).getDate();
+  return {
+    from: `${year}-${pad2(month)}-01`,
+    to: `${year}-${pad2(month)}-${pad2(lastDay)}`,
+  };
+}
+
+function parseYyyyMmDd(s: string): { y: number; m: number; d: number } | null {
+  const parts = s.trim().split("-");
+  if (parts.length !== 3) return null;
+  const y = Number(parts[0]);
+  const m = Number(parts[1]);
+  const d = Number(parts[2]);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  return { y, m, d };
+}
+
+/** Inclusive local start/end of day; if from > to, swap calendar days. */
+function customStringsToRangeIso(
+  fromStr: string,
+  toStr: string,
+  fallbackYear: number,
+  fallbackMonth: number | null,
+): { from: string; to: string } {
+  const a = parseYyyyMmDd(fromStr);
+  const b = parseYyyyMmDd(toStr);
+  if (!a || !b) return quickRangeIso(fallbackYear, fallbackMonth);
+  let start = new Date(a.y, a.m - 1, a.d, 0, 0, 0, 0);
+  let end = new Date(b.y, b.m - 1, b.d, 23, 59, 59, 999);
+  if (start.getTime() > end.getTime()) {
+    const t = start;
+    start = new Date(b.y, b.m - 1, b.d, 0, 0, 0, 0);
+    end = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 23, 59, 59, 999);
+  }
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+
+type StoredSpendFilterState = {
+  year: number;
+  month: number | null;
+  dateRangeMode: DateRangeMode;
+  customRangeFrom: string;
+  customRangeTo: string;
+};
+
+function readStoredSpendFilter(): StoredSpendFilterState {
   const end = spendYearWindowEnd();
   const defaultYear = end;
+  const defaults: StoredSpendFilterState = {
+    year: defaultYear,
+    month: null,
+    dateRangeMode: "quick",
+    customRangeFrom: `${defaultYear}-01-01`,
+    customRangeTo: `${defaultYear}-12-31`,
+  };
   if (typeof window === "undefined") {
-    return { year: defaultYear, month: null };
+    return defaults;
   }
   try {
     const raw = localStorage.getItem(SPEND_FILTER_STORAGE_KEY);
-    if (!raw) return { year: defaultYear, month: null };
-    const parsed = JSON.parse(raw) as { year?: unknown; month?: unknown };
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
     const rawYear =
       typeof parsed.year === "number" && Number.isFinite(parsed.year)
         ? parsed.year
@@ -120,9 +204,26 @@ function readStoredSpendFilter(): { year: number; month: number | null } {
             parsed.month <= 12
           ? parsed.month
           : null;
-    return { year, month };
+    const dateRangeMode: DateRangeMode =
+      parsed.dateRangeMode === "custom" ? "custom" : "quick";
+    const ymd = quickRangeToYyyyMmDd(year, month);
+    const customRangeFrom =
+      typeof parsed.customRangeFrom === "string" && parsed.customRangeFrom
+        ? parsed.customRangeFrom
+        : ymd.from;
+    const customRangeTo =
+      typeof parsed.customRangeTo === "string" && parsed.customRangeTo
+        ? parsed.customRangeTo
+        : ymd.to;
+    return {
+      year,
+      month,
+      dateRangeMode,
+      customRangeFrom,
+      customRangeTo,
+    };
   } catch {
-    return { year: defaultYear, month: null };
+    return defaults;
   }
 }
 
@@ -135,6 +236,51 @@ type Summary = {
     percentage: number;
   }[];
 };
+
+type TransactionSortColumn = "date" | "merchant" | "category" | "source" | "amount";
+
+function TransactionSortHeader({
+  column,
+  activeColumn,
+  dir,
+  onClick,
+  align = "left",
+  children,
+}: {
+  column: TransactionSortColumn;
+  activeColumn: TransactionSortColumn;
+  dir: "asc" | "desc";
+  onClick: () => void;
+  align?: "left" | "right";
+  children: ReactNode;
+}) {
+  const active = activeColumn === column;
+  const arrow = dir === "asc" ? "▲" : "▼";
+  return (
+    <th
+      scope="col"
+      className={`px-4 py-3 ${align === "right" ? "text-right" : "text-left"}`}
+    >
+      <button
+        type="button"
+        onClick={onClick}
+        className={`group inline-flex w-full items-center gap-1.5 text-left text-xs font-semibold uppercase tracking-wide hover:text-zinc-800 dark:hover:text-zinc-200 ${
+          align === "right" ? "justify-end" : ""
+        } ${active ? "text-zinc-800 dark:text-zinc-100" : "text-zinc-500"}`}
+      >
+        <span>{children}</span>
+        <span
+          className={`select-none text-[10px] ${
+            active ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-400 opacity-40 group-hover:opacity-100"
+          }`}
+          aria-hidden
+        >
+          {active ? arrow : "↕"}
+        </span>
+      </button>
+    </th>
+  );
+}
 
 export type { GmailConnectionState };
 
@@ -170,6 +316,9 @@ function DashboardClientImpl({
   const [spendYear, setSpendYear] = useState(() => spendYearWindowEnd());
   /** `null` = entire selected year; number 1–12 = that calendar month only. */
   const [spendMonth, setSpendMonth] = useState<number | null>(null);
+  const [dateRangeMode, setDateRangeMode] = useState<DateRangeMode>("quick");
+  const [customRangeFrom, setCustomRangeFrom] = useState("");
+  const [customRangeTo, setCustomRangeTo] = useState("");
   const [spendFilterReady, setSpendFilterReady] = useState(false);
   const [transactions, setTransactions] = useState<TransactionJson[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -217,14 +366,28 @@ function DashboardClientImpl({
   const [editSaving, setEditSaving] = useState(false);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
+  const [merchantFilter, setMerchantFilter] = useState("");
+  const [categoryFilterId, setCategoryFilterId] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<
+    "" | "email" | "image" | "manual"
+  >("");
+  const [minAmountInput, setMinAmountInput] = useState("");
+  const [maxAmountInput, setMaxAmountInput] = useState("");
+  const [txSort, setTxSort] = useState<{
+    column: TransactionSortColumn;
+    dir: "asc" | "desc";
+  }>({ column: "date", dir: "desc" });
   const MAX_BATCH_SELECTION = 10;
 
   const yearSelectOptions = useMemo(() => selectableSpendYears(), []);
 
   useEffect(() => {
-    const { year, month } = readStoredSpendFilter();
-    setSpendYear(year);
-    setSpendMonth(month);
+    const s = readStoredSpendFilter();
+    setSpendYear(s.year);
+    setSpendMonth(s.month);
+    setDateRangeMode(s.dateRangeMode);
+    setCustomRangeFrom(s.customRangeFrom);
+    setCustomRangeTo(s.customRangeTo);
     setSpendFilterReady(true);
   }, []);
 
@@ -233,23 +396,129 @@ function DashboardClientImpl({
     try {
       localStorage.setItem(
         SPEND_FILTER_STORAGE_KEY,
-        JSON.stringify({ year: spendYear, month: spendMonth }),
+        JSON.stringify({
+          year: spendYear,
+          month: spendMonth,
+          dateRangeMode,
+          customRangeFrom,
+          customRangeTo,
+        }),
       );
     } catch {
       // ignore private mode / quota
     }
-  }, [spendFilterReady, spendYear, spendMonth]);
+  }, [
+    spendFilterReady,
+    spendYear,
+    spendMonth,
+    dateRangeMode,
+    customRangeFrom,
+    customRangeTo,
+  ]);
 
   const range = useMemo(() => {
-    if (spendMonth == null) {
-      const from = new Date(spendYear, 0, 1, 0, 0, 0, 0);
-      const to = new Date(spendYear, 11, 31, 23, 59, 59, 999);
-      return { from: from.toISOString(), to: to.toISOString() };
+    if (dateRangeMode === "custom" && customRangeFrom && customRangeTo) {
+      return customStringsToRangeIso(
+        customRangeFrom,
+        customRangeTo,
+        spendYear,
+        spendMonth,
+      );
     }
-    const from = new Date(spendYear, spendMonth - 1, 1, 0, 0, 0, 0);
-    const to = new Date(spendYear, spendMonth, 0, 23, 59, 59, 999);
-    return { from: from.toISOString(), to: to.toISOString() };
-  }, [spendYear, spendMonth]);
+    return quickRangeIso(spendYear, spendMonth);
+  }, [
+    dateRangeMode,
+    customRangeFrom,
+    customRangeTo,
+    spendYear,
+    spendMonth,
+  ]);
+
+  const handleDateRangeModeChange = useCallback(
+    (next: DateRangeMode) => {
+      if (next === "custom") {
+        const { from, to } = quickRangeToYyyyMmDd(spendYear, spendMonth);
+        setCustomRangeFrom(from);
+        setCustomRangeTo(to);
+      }
+      setDateRangeMode(next);
+    },
+    [spendYear, spendMonth],
+  );
+
+  const minAmountBound = useMemo(() => {
+    const x = parseFloat(minAmountInput);
+    return Number.isFinite(x) ? x : null;
+  }, [minAmountInput]);
+
+  const maxAmountBound = useMemo(() => {
+    const x = parseFloat(maxAmountInput);
+    return Number.isFinite(x) ? x : null;
+  }, [maxAmountInput]);
+
+  const filteredTransactions = useMemo(() => {
+    const q = merchantFilter.trim().toLowerCase();
+    return transactions.filter((tx) => {
+      if (q) {
+        const m = (tx.merchant ?? "").toLowerCase();
+        if (!m.includes(q)) return false;
+      }
+      if (categoryFilterId && tx.category?.id !== categoryFilterId) return false;
+      if (sourceFilter && tx.source !== sourceFilter) return false;
+      if (minAmountBound != null && tx.amount < minAmountBound) return false;
+      if (maxAmountBound != null && tx.amount > maxAmountBound) return false;
+      return true;
+    });
+  }, [
+    transactions,
+    merchantFilter,
+    categoryFilterId,
+    sourceFilter,
+    minAmountBound,
+    maxAmountBound,
+  ]);
+
+  const displayedTransactions = useMemo(() => {
+    const rows = [...filteredTransactions];
+    const { column: col, dir } = txSort;
+    const mul = dir === "asc" ? 1 : -1;
+    const cmpStrings = (a: string, b: string) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" });
+    rows.sort((x, y) => {
+      let c = 0;
+      if (col === "date") {
+        c = new Date(x.occurredAt).getTime() - new Date(y.occurredAt).getTime();
+      } else if (col === "merchant") {
+        c = cmpStrings(x.merchant ?? "", y.merchant ?? "");
+      } else if (col === "category") {
+        c = cmpStrings(x.category?.name ?? "", y.category?.name ?? "");
+      } else if (col === "source") {
+        c = cmpStrings(x.source ?? "", y.source ?? "");
+      } else if (col === "amount") {
+        c = x.amount - y.amount;
+      }
+      c *= mul;
+      if (c !== 0) return c > 0 ? 1 : -1;
+      return x.id.localeCompare(y.id);
+    });
+    return rows;
+  }, [filteredTransactions, txSort]);
+
+  const onTxSortHeaderClick = useCallback((column: TransactionSortColumn) => {
+    setTxSort((prev) =>
+      prev.column === column
+        ? { column, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { column, dir: "desc" },
+    );
+  }, []);
+
+  const clearTxFilters = useCallback(() => {
+    setMerchantFilter("");
+    setCategoryFilterId("");
+    setSourceFilter("");
+    setMinAmountInput("");
+    setMaxAmountInput("");
+  }, []);
 
   const gmailRows = gmailPages[gmailPageIndex] ?? [];
 
@@ -967,44 +1236,25 @@ function DashboardClientImpl({
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                Totals use the full year by default. Pick a month to zoom in, or
-                choose &quot;All months&quot; to return to the yearly view.
+                Totals follow the date range below: use month and year for a quick
+                view, or switch to custom start and end dates for a specific window.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
-                Month
-                <select
-                  className="h-10 min-w-[160px] rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-                  value={spendMonth ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setSpendMonth(v === "" ? null : Number(v));
-                  }}
-                >
-                  <option value="">All months</option>
-                  {MONTH_OPTIONS.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
-                Year
-                <select
-                  className="h-10 min-w-[100px] rounded-lg border border-zinc-300 bg-white px-3 text-sm tabular-nums text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-                  value={spendYear}
-                  onChange={(e) => setSpendYear(Number(e.target.value))}
-                >
-                  {yearSelectOptions.map((y) => (
-                    <option key={y} value={y}>
-                      {y}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+            <DateRangeControls
+              variant="overview"
+              dateRangeMode={dateRangeMode}
+              onDateRangeModeChange={handleDateRangeModeChange}
+              spendMonth={spendMonth}
+              spendYear={spendYear}
+              onSpendMonthChange={setSpendMonth}
+              onSpendYearChange={setSpendYear}
+              customRangeFrom={customRangeFrom}
+              customRangeTo={customRangeTo}
+              onCustomFromChange={setCustomRangeFrom}
+              onCustomToChange={setCustomRangeTo}
+              yearSelectOptions={yearSelectOptions}
+              monthOptions={MONTH_OPTIONS}
+            />
           </header>
         )}
 
@@ -1215,59 +1465,160 @@ function DashboardClientImpl({
 
         {activeTab === "transactions" && (
           <section className="fade-slide-in rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-            <div className="flex flex-col gap-4 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <h2 className="text-lg font-medium">Transactions</h2>
-                <p className="mt-1 text-xs text-zinc-500">
-                  {new Date(range.from).toLocaleDateString()} —{" "}
-                  {new Date(range.to).toLocaleDateString()}
-                </p>
+            <div className="flex flex-col gap-4 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-medium">Transactions</h2>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {new Date(range.from).toLocaleDateString()} —{" "}
+                    {new Date(range.to).toLocaleDateString()}
+                  </p>
+                </div>
+                <DateRangeControls
+                  variant="transactions"
+                  dateRangeMode={dateRangeMode}
+                  onDateRangeModeChange={handleDateRangeModeChange}
+                  spendMonth={spendMonth}
+                  spendYear={spendYear}
+                  onSpendMonthChange={setSpendMonth}
+                  onSpendYearChange={setSpendYear}
+                  customRangeFrom={customRangeFrom}
+                  customRangeTo={customRangeTo}
+                  onCustomFromChange={setCustomRangeFrom}
+                  onCustomToChange={setCustomRangeTo}
+                  yearSelectOptions={yearSelectOptions}
+                  monthOptions={MONTH_OPTIONS}
+                />
               </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
-                  Month
-                  <select
-                    className="h-9 min-w-[150px] rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-                    value={spendMonth ?? ""}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setSpendMonth(v === "" ? null : Number(v));
-                    }}
+              <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/30">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                    Filter rows
+                  </p>
+                  <button
+                    type="button"
+                    onClick={clearTxFilters}
+                    className="text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
                   >
-                    <option value="">All months</option>
-                    {MONTH_OPTIONS.map((m) => (
-                      <option key={m.value} value={m.value}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
-                  Year
-                  <select
-                    className="h-9 min-w-[92px] rounded-lg border border-zinc-300 bg-white px-2 text-sm tabular-nums text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-                    value={spendYear}
-                    onChange={(e) => setSpendYear(Number(e.target.value))}
-                  >
-                    {yearSelectOptions.map((y) => (
-                      <option key={y} value={y}>
-                        {y}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    Clear filters
+                  </button>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                    Merchant contains
+                    <input
+                      type="search"
+                      placeholder="Search…"
+                      value={merchantFilter}
+                      onChange={(e) => setMerchantFilter(e.target.value)}
+                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                    Category
+                    <select
+                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                      value={categoryFilterId}
+                      onChange={(e) => setCategoryFilterId(e.target.value)}
+                    >
+                      <option value="">All</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                    Source
+                    <select
+                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                      value={sourceFilter}
+                      onChange={(e) =>
+                        setSourceFilter(
+                          e.target.value as "" | "email" | "image" | "manual",
+                        )
+                      }
+                    >
+                      <option value="">All</option>
+                      <option value="email">Email</option>
+                      <option value="image">Image</option>
+                      <option value="manual">Manual</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                    Min amount
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="Any"
+                      value={minAmountInput}
+                      onChange={(e) => setMinAmountInput(e.target.value)}
+                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
+                    Max amount
+                    <input
+                      type="number"
+                      step="any"
+                      placeholder="Any"
+                      value={maxAmountInput}
+                      onChange={(e) => setMaxAmountInput(e.target.value)}
+                      className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-sm tabular-nums dark:border-zinc-700 dark:bg-zinc-950"
+                    />
+                  </label>
+                </div>
               </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-left text-sm">
                 <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40">
                   <tr>
-                    <th className="px-4 py-3">Date</th>
-                    <th className="px-4 py-3">Merchant</th>
-                    <th className="px-4 py-3">Category</th>
-                    <th className="px-4 py-3">Source</th>
-                    <th className="px-4 py-3 text-right">Amount</th>
-                    <th className="px-4 py-3 text-right">Actions</th>
+                    <TransactionSortHeader
+                      column="date"
+                      activeColumn={txSort.column}
+                      dir={txSort.dir}
+                      onClick={() => onTxSortHeaderClick("date")}
+                    >
+                      Date
+                    </TransactionSortHeader>
+                    <TransactionSortHeader
+                      column="merchant"
+                      activeColumn={txSort.column}
+                      dir={txSort.dir}
+                      onClick={() => onTxSortHeaderClick("merchant")}
+                    >
+                      Merchant
+                    </TransactionSortHeader>
+                    <TransactionSortHeader
+                      column="category"
+                      activeColumn={txSort.column}
+                      dir={txSort.dir}
+                      onClick={() => onTxSortHeaderClick("category")}
+                    >
+                      Category
+                    </TransactionSortHeader>
+                    <TransactionSortHeader
+                      column="source"
+                      activeColumn={txSort.column}
+                      dir={txSort.dir}
+                      onClick={() => onTxSortHeaderClick("source")}
+                    >
+                      Source
+                    </TransactionSortHeader>
+                    <TransactionSortHeader
+                      column="amount"
+                      activeColumn={txSort.column}
+                      dir={txSort.dir}
+                      align="right"
+                      onClick={() => onTxSortHeaderClick("amount")}
+                    >
+                      Amount
+                    </TransactionSortHeader>
+                    <th scope="col" className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1283,8 +1634,14 @@ function DashboardClientImpl({
                         No transactions in this range
                       </td>
                     </tr>
+                  ) : displayedTransactions.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-8 text-center text-zinc-500">
+                        No transactions match your filters
+                      </td>
+                    </tr>
                   ) : (
-                    transactions.map((tx) => (
+                    displayedTransactions.map((tx) => (
                       <tr
                         key={tx.id}
                         className="border-b border-zinc-100 dark:border-zinc-800/80"
