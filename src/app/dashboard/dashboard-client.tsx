@@ -775,11 +775,13 @@ function DashboardClientImpl({
     const input = e.target;
     const list = input.files;
     if (!list?.length) return;
+    /** Snapshot immediately — WebKit/macOS can clear `FileList` when `input.value` is reset. */
+    const chosen = Array.from(list);
     setMessage(null);
     setReceiptQueue((prev) => {
       const next = [...prev];
       let lastNotice: string | null = null;
-      for (const file of Array.from(list)) {
+      for (const file of chosen) {
         if (next.length >= MAX_CAPTURE_RECEIPTS) {
           lastNotice = `You can stage at most ${MAX_CAPTURE_RECEIPTS} files. Extra files were not added.`;
           break;
@@ -809,7 +811,14 @@ function DashboardClientImpl({
       }
       return next;
     });
-    input.value = "";
+    /** Defer reset so Finder can finish handing off files (sync clear often drops selection on macOS). */
+    window.setTimeout(() => {
+      input.value = "";
+    }, 0);
+  }
+
+  function openReceiptFilePicker() {
+    receiptFileInputRef.current?.click();
   }
 
   function removeQueuedReceipt(id: string) {
@@ -1532,18 +1541,25 @@ function DashboardClientImpl({
                 transaction. Up to {MAX_CAPTURE_RECEIPTS} files at once, 12 MB each.
               </p>
               <div className="flex flex-col gap-3">
-                <label className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-300 px-4 py-6 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900/50">
-                  <input
-                    ref={receiptFileInputRef}
-                    type="file"
-                    accept="image/*,.heic,.heif,application/pdf,.pdf"
-                    multiple
-                    className="hidden"
-                    disabled={receiptParseBusy || batchRunning}
-                    onChange={onReceiptFilesSelected}
-                  />
+                <input
+                  ref={receiptFileInputRef}
+                  id="capture-receipt-input"
+                  type="file"
+                  accept="image/*,.heic,.heif,application/pdf,.pdf"
+                  multiple
+                  className="sr-only"
+                  tabIndex={-1}
+                  disabled={receiptParseBusy || batchRunning}
+                  onChange={onReceiptFilesSelected}
+                />
+                <button
+                  type="button"
+                  disabled={receiptParseBusy || batchRunning}
+                  onClick={() => openReceiptFilePicker()}
+                  className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-300 px-4 py-6 text-sm font-medium hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-900/50"
+                >
                   Choose file(s)
-                </label>
+                </button>
                 {receiptQueue.length > 0 && (
                   <ul className="space-y-1.5 text-sm">
                     {receiptQueue.map((q) => (
@@ -1898,7 +1914,9 @@ function DashboardClientImpl({
           });
           setBatchModalOpen(false);
           setReceiptQueue([]);
-          if (receiptFileInputRef.current) receiptFileInputRef.current.value = "";
+          window.setTimeout(() => {
+            if (receiptFileInputRef.current) receiptFileInputRef.current.value = "";
+          }, 0);
         }}
       />
       <EmailBodyPreviewDialog
