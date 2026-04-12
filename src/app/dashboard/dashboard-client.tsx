@@ -756,44 +756,60 @@ function DashboardClientImpl({
     })();
   }, [fetchGmailMessagesPage]);
 
+  /** Browsers often omit `file.type` (empty) for HEIC, some PNGs, or "Download" folder picks. */
   function isAllowedReceiptFile(file: File): boolean {
     const name = file.name.toLowerCase();
-    return (
-      file.type.startsWith("image/") ||
-      file.type === "application/pdf" ||
-      name.endsWith(".pdf")
-    );
+    const t = (file.type || "").toLowerCase();
+    if (t.startsWith("image/")) return true;
+    if (t === "application/pdf" || name.endsWith(".pdf")) return true;
+    if (
+      (t === "" || t === "application/octet-stream") &&
+      /\.(png|jpe?g|gif|webp|heic|heif|avif|bmp|tif|tiff)$/i.test(name)
+    ) {
+      return true;
+    }
+    return false;
   }
 
   function onReceiptFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
-    const list = e.target.files;
+    const input = e.target;
+    const list = input.files;
     if (!list?.length) return;
     setMessage(null);
-    let notice: string | null = null;
     setReceiptQueue((prev) => {
       const next = [...prev];
+      let lastNotice: string | null = null;
       for (const file of Array.from(list)) {
         if (next.length >= MAX_CAPTURE_RECEIPTS) {
-          notice = `You can stage at most ${MAX_CAPTURE_RECEIPTS} files. Extra files were not added.`;
+          lastNotice = `You can stage at most ${MAX_CAPTURE_RECEIPTS} files. Extra files were not added.`;
           break;
         }
         if (!isAllowedReceiptFile(file)) {
-          notice = "Skipped a file that is not an image or PDF.";
+          lastNotice = `Skipped "${file.name}" — use an image (PNG, JPEG, HEIC, …) or PDF.`;
           continue;
         }
         if (file.size > MAX_RECEIPT_FILE_BYTES) {
-          notice = `Skipped "${file.name}" (larger than 12 MB).`;
+          lastNotice = `Skipped "${file.name}" (larger than 12 MB).`;
+          continue;
+        }
+        if (file.size === 0) {
+          lastNotice = `Skipped "${file.name}" (file is empty).`;
           continue;
         }
         next.push({
-          id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          id:
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? `q-${crypto.randomUUID()}`
+              : `q-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
           file,
         });
       }
+      if (lastNotice) {
+        queueMicrotask(() => setMessage(lastNotice));
+      }
       return next;
     });
-    if (notice) setMessage(notice);
-    e.target.value = "";
+    input.value = "";
   }
 
   function removeQueuedReceipt(id: string) {
@@ -1520,7 +1536,7 @@ function DashboardClientImpl({
                   <input
                     ref={receiptFileInputRef}
                     type="file"
-                    accept="image/*,application/pdf,.pdf"
+                    accept="image/*,.heic,.heif,application/pdf,.pdf"
                     multiple
                     className="hidden"
                     disabled={receiptParseBusy || batchRunning}
