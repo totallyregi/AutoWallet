@@ -36,11 +36,16 @@ import {
   type ReactNode,
 } from "react";
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
   Cell,
   Pie,
   PieChart,
   ResponsiveContainer,
   Tooltip,
+  XAxis,
+  YAxis,
 } from "recharts";
 
 const COLORS = [
@@ -247,6 +252,13 @@ type Summary = {
     amount: number;
     percentage: number;
   }[];
+  transactionCount: number;
+  averageTransaction: number;
+  needsReviewCount: number;
+  maxSingle: number;
+  byMonth: { month: string; amount: number }[];
+  bySource: { source: string; name: string; amount: number; percentage: number }[];
+  topMerchants: { name: string; amount: number }[];
 };
 
 type TransactionSortColumn = "date" | "merchant" | "category" | "source" | "amount";
@@ -1334,6 +1346,32 @@ function DashboardClientImpl({
       value: b.amount,
     })) ?? [];
 
+  const monthChartData =
+    summary?.byMonth.map((row) => {
+      const [y, mo] = row.month.split("-").map(Number);
+      const d = new Date(Date.UTC(y, (mo ?? 1) - 1, 1));
+      return {
+        ...row,
+        label: d.toLocaleString(undefined, {
+          month: "short",
+          year: "numeric",
+          timeZone: "UTC",
+        }),
+      };
+    }) ?? [];
+
+  const sourceChartData =
+    summary?.bySource.map((b) => ({
+      name: b.name,
+      value: b.amount,
+    })) ?? [];
+
+  const fmtUsd = (n: number) =>
+    new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+    }).format(n);
+
   const tabButtonClass = (tabId: (typeof TABS)[number]["id"]) =>
     `rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200 ${
       activeTab === tabId
@@ -1363,16 +1401,6 @@ function DashboardClientImpl({
       </aside>
 
       <div className="min-w-0 space-y-6">
-        {activeTab === "overview" && (
-          <header className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-            <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              Totals and charts below use the date range above. Switch tabs to
-              Transactions to filter and sort individual rows.
-            </p>
-          </header>
-        )}
-
         {(activeTab === "overview" || activeTab === "transactions") && (
           <div className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
@@ -1412,73 +1440,199 @@ function DashboardClientImpl({
         )}
 
         {activeTab === "overview" && (
-          <section className="fade-slide-in grid gap-6 lg:grid-cols-2">
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <h2 className="mb-1 text-lg font-medium">Total spend</h2>
-              <p className="text-3xl font-semibold tabular-nums">
-                {loading
-                  ? "…"
-                  : new Intl.NumberFormat(undefined, {
-                      style: "currency",
-                      currency: "USD",
-                    }).format(summary?.total ?? 0)}
-              </p>
-              <p className="mt-2 text-xs text-zinc-500">
-                Range: {new Date(range.from).toLocaleDateString()} —{" "}
-                {new Date(range.to).toLocaleDateString()}
-              </p>
+          <section className="fade-slide-in space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <h2 className="text-sm font-medium text-zinc-500">Transactions</h2>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  {loading ? "…" : (summary?.transactionCount ?? 0).toLocaleString()}
+                </p>
+                <p className="mt-2 text-xs text-zinc-500">Spend rows in this range</p>
+              </div>
+              <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <h2 className="text-sm font-medium text-zinc-500">Average</h2>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  {loading ? "…" : fmtUsd(summary?.averageTransaction ?? 0)}
+                </p>
+                <p className="mt-2 text-xs text-zinc-500">Per spend transaction</p>
+              </div>
+              <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <h2 className="text-sm font-medium text-zinc-500">Largest</h2>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  {loading ? "…" : fmtUsd(summary?.maxSingle ?? 0)}
+                </p>
+                <p className="mt-2 text-xs text-zinc-500">Single largest charge</p>
+              </div>
+              <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <h2 className="text-sm font-medium text-zinc-500">Needs review</h2>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  {loading ? "…" : (summary?.needsReviewCount ?? 0).toLocaleString()}
+                </p>
+                <p className="mt-2 text-xs text-zinc-500">Open Transactions to resolve</p>
+              </div>
             </div>
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <h2 className="mb-4 text-lg font-medium">By category</h2>
-              <div className="h-64 w-full">
-                {!loading && chartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={chartData}
-                        dataKey="value"
-                        nameKey="name"
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={50}
-                        outerRadius={90}
-                        paddingAngle={2}
-                      >
-                        {chartData.map((_, i) => (
-                          <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        formatter={(value) =>
-                          new Intl.NumberFormat(undefined, {
-                            style: "currency",
-                            currency: "USD",
-                          }).format(Number(value ?? 0))
-                        }
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-sm text-zinc-500">
-                    {loading ? "Loading chart…" : "No data in this range"}
-                  </div>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <h2 className="mb-1 text-lg font-medium">Total spend</h2>
+                <p className="text-3xl font-semibold tabular-nums">
+                  {loading ? "…" : fmtUsd(summary?.total ?? 0)}
+                </p>
+                <p className="mt-2 text-xs text-zinc-500">
+                  Range: {new Date(range.from).toLocaleDateString()} —{" "}
+                  {new Date(range.to).toLocaleDateString()}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <h2 className="mb-4 text-lg font-medium">By category</h2>
+                <div className="h-64 w-full">
+                  {!loading && chartData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={chartData}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={50}
+                          outerRadius={90}
+                          paddingAngle={2}
+                        >
+                          {chartData.map((_, i) => (
+                            <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value) => fmtUsd(Number(value ?? 0))} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+                      {loading ? "Loading chart…" : "No data in this range"}
+                    </div>
+                  )}
+                </div>
+                {summary && summary.byCategory.length > 0 && (
+                  <ul className="mt-4 space-y-2 text-sm">
+                    {summary.byCategory.map((b) => (
+                      <li key={b.slug + b.name} className="flex justify-between gap-4">
+                        <span className="text-zinc-700 dark:text-zinc-300">{b.name}</span>
+                        <span className="tabular-nums text-zinc-600 dark:text-zinc-400">
+                          {b.percentage}% · {fmtUsd(b.amount)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
-              {summary && summary.byCategory.length > 0 && (
-                <ul className="mt-4 space-y-2 text-sm">
-                  {summary.byCategory.map((b) => (
-                    <li key={b.slug + b.name} className="flex justify-between gap-4">
-                      <span className="text-zinc-700 dark:text-zinc-300">{b.name}</span>
-                      <span className="tabular-nums text-zinc-600 dark:text-zinc-400">
-                        {b.percentage}% ·{" "}
-                        {new Intl.NumberFormat(undefined, {
-                          style: "currency",
-                          currency: "USD",
-                        }).format(b.amount)}
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <h2 className="mb-4 text-lg font-medium">Spend by month</h2>
+                <div className="h-72 w-full">
+                  {!loading && monthChartData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={monthChartData} margin={{ left: 4, right: 8 }}>
+                        <CartesianGrid
+                          vertical={false}
+                          className="stroke-zinc-200 dark:stroke-zinc-800"
+                          strokeDasharray="3 3"
+                        />
+                        <XAxis
+                          dataKey="label"
+                          tick={{ fontSize: 11, fill: "currentColor" }}
+                          className="text-zinc-500"
+                          interval="preserveStartEnd"
+                        />
+                        <YAxis
+                          width={52}
+                          tick={{ fontSize: 11, fill: "currentColor" }}
+                          className="text-zinc-500"
+                          tickFormatter={(v) =>
+                            new Intl.NumberFormat(undefined, {
+                              notation: "compact",
+                              maximumFractionDigits: 1,
+                            }).format(Number(v))
+                          }
+                        />
+                        <Tooltip formatter={(value) => fmtUsd(Number(value ?? 0))} />
+                        <Bar dataKey="amount" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+                      {loading ? "Loading chart…" : "No monthly data in this range"}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <h2 className="mb-4 text-lg font-medium">By source</h2>
+                <div className="h-56 w-full">
+                  {!loading && sourceChartData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={sourceChartData}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={44}
+                          outerRadius={78}
+                          paddingAngle={2}
+                        >
+                          {sourceChartData.map((_, i) => (
+                            <Cell key={i} fill={COLORS[(i + 2) % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value) => fmtUsd(Number(value ?? 0))} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+                      {loading ? "Loading chart…" : "No data in this range"}
+                    </div>
+                  )}
+                </div>
+                {summary && summary.bySource.length > 0 && (
+                  <ul className="mt-4 space-y-2 text-sm">
+                    {summary.bySource.map((b) => (
+                      <li key={b.source} className="flex justify-between gap-4">
+                        <span className="text-zinc-700 dark:text-zinc-300">{b.name}</span>
+                        <span className="tabular-nums text-zinc-600 dark:text-zinc-400">
+                          {b.percentage}% · {fmtUsd(b.amount)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+              <h2 className="mb-4 text-lg font-medium">Top merchants</h2>
+              {!loading && summary && summary.topMerchants.length > 0 ? (
+                <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {summary.topMerchants.map((row, i) => (
+                    <li
+                      key={`${row.name}-${i}`}
+                      className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0"
+                    >
+                      <span className="min-w-0 truncate text-zinc-800 dark:text-zinc-200">
+                        {row.name}
+                      </span>
+                      <span className="shrink-0 tabular-nums text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                        {fmtUsd(row.amount)}
                       </span>
                     </li>
                   ))}
                 </ul>
+              ) : (
+                <p className="text-sm text-zinc-500">
+                  {loading ? "Loading…" : "No merchant data in this range"}
+                </p>
               )}
             </div>
           </section>
