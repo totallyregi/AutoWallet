@@ -1,58 +1,90 @@
 "use client";
 
 import type { TransactionJson } from "@/lib/transaction-json";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export type CategoryOption = { id: string; name: string; slug: string };
 
-type TransactionEditModalProps = {
-  open: boolean;
-  tx: TransactionJson | null;
-  categories: CategoryOption[];
-  saving: boolean;
-  onClose: () => void;
-  onSave: (payload: {
-    id: string;
-    amount: number;
-    currency: string;
-    occurredAt: string;
-    merchant: string | null;
-    notes: string | null;
-    categoryId: string | null;
-    needsReview: boolean;
-  }) => Promise<void>;
+export type TransactionFormPayload = {
+  amount: number;
+  currency: string;
+  occurredAt: string;
+  merchant: string | null;
+  notes: string | null;
+  categoryId: string | null;
+  needsReview: boolean;
 };
 
-export function TransactionEditModal({
-  open,
-  tx,
-  categories,
-  saving,
-  onClose,
-  onSave,
-}: TransactionEditModalProps) {
-  const [amount, setAmount] = useState(() => (tx ? String(tx.amount) : ""));
-  const [currency, setCurrency] = useState(() =>
-    tx ? (tx.currency || "USD").toUpperCase() : "USD",
-  );
-  const [occurredAt, setOccurredAt] = useState(() =>
-    tx ? tx.occurredAt.slice(0, 16) : "",
-  );
-  const [merchant, setMerchant] = useState(() => tx?.merchant ?? "");
-  const [notes, setNotes] = useState(() => tx?.notes ?? "");
-  const [categoryId, setCategoryId] = useState<string>(() => tx?.category?.id ?? "");
-  const [needsReview, setNeedsReview] = useState(() => tx?.needsReview ?? false);
+function localDatetimeInputValue(d: Date): string {
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
 
-  if (!open || !tx) return null;
-  const txId = tx.id;
+type TransactionEditModalProps =
+  | {
+      variant?: "edit";
+      open: boolean;
+      tx: TransactionJson | null;
+      categories: CategoryOption[];
+      saving: boolean;
+      onClose: () => void;
+      onSave: (payload: TransactionFormPayload & { id: string }) => Promise<void>;
+    }
+  | {
+      variant: "create";
+      open: boolean;
+      tx?: null;
+      categories: CategoryOption[];
+      saving: boolean;
+      onClose: () => void;
+      onCreate: (payload: TransactionFormPayload) => Promise<void>;
+    };
+
+export function TransactionEditModal(props: TransactionEditModalProps) {
+  const isCreate = props.variant === "create";
+  const { open, categories, saving, onClose } = props;
+  const tx = isCreate ? null : props.tx;
+
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState("USD");
+  const [occurredAt, setOccurredAt] = useState("");
+  const [merchant, setMerchant] = useState("");
+  const [notes, setNotes] = useState("");
+  const [categoryId, setCategoryId] = useState<string>("");
+  const [needsReview, setNeedsReview] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    if (isCreate) {
+      setAmount("");
+      setCurrency("USD");
+      setOccurredAt(localDatetimeInputValue(new Date()));
+      setMerchant("");
+      setNotes("");
+      setCategoryId("");
+      setNeedsReview(false);
+      return;
+    }
+    if (tx) {
+      setAmount(String(tx.amount));
+      setCurrency((tx.currency || "USD").toUpperCase());
+      setOccurredAt(tx.occurredAt.slice(0, 16));
+      setMerchant(tx.merchant ?? "");
+      setNotes(tx.notes ?? "");
+      setCategoryId(tx.category?.id ?? "");
+      setNeedsReview(tx.needsReview);
+    }
+  }, [open, isCreate, tx]);
+
+  if (!open) return null;
+  if (!isCreate && !tx) return null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const parsedAmount = Number(amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return;
     if (!occurredAt) return;
-    await onSave({
-      id: txId,
+    const payload: TransactionFormPayload = {
       amount: parsedAmount,
       currency: currency.trim().toUpperCase(),
       occurredAt: new Date(occurredAt).toISOString(),
@@ -60,8 +92,18 @@ export function TransactionEditModal({
       notes: notes.trim() || null,
       categoryId: categoryId || null,
       needsReview,
-    });
+    };
+    if (props.variant === "create") {
+      await props.onCreate(payload);
+    } else if (tx) {
+      await props.onSave({ ...payload, id: tx.id });
+    }
   }
+
+  const title = isCreate ? "Add transaction" : "Edit transaction";
+  const titleId = isCreate ? "tx-create-title" : "tx-edit-title";
+  const submitLabel =
+    saving ? (isCreate ? "Adding…" : "Saving…") : isCreate ? "Add" : "Save";
 
   return (
     <div
@@ -72,14 +114,19 @@ export function TransactionEditModal({
       <div
         role="dialog"
         aria-modal="true"
-        aria-labelledby="tx-edit-title"
+        aria-labelledby={titleId}
         className="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
         onClick={(e) => e.stopPropagation()}
       >
         <form onSubmit={submit} className="space-y-4 p-5">
-          <h3 id="tx-edit-title" className="text-lg font-semibold">
-            Edit transaction
+          <h3 id={titleId} className="text-lg font-semibold">
+            {title}
           </h3>
+          {isCreate && (
+            <p className="text-xs text-zinc-500">
+              Creates a manual entry included in spend totals for the chosen date.
+            </p>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-sm">
@@ -174,7 +221,7 @@ export function TransactionEditModal({
               disabled={saving}
               className="h-9 rounded-md bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              {saving ? "Saving..." : "Save"}
+              {submitLabel}
             </button>
           </div>
         </form>
@@ -182,4 +229,3 @@ export function TransactionEditModal({
     </div>
   );
 }
-

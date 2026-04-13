@@ -24,7 +24,11 @@ import { GmailFilters } from "./gmail-filters";
 import { GmailMessagesPreview } from "./gmail-messages-preview";
 import type { GmailConnectionState, GmailTableRow } from "./gmail-types";
 import { DateRangeControls, type DateRangeMode } from "./date-range-controls";
-import { TransactionEditModal, type CategoryOption } from "./transaction-edit-modal";
+import {
+  TransactionEditModal,
+  type CategoryOption,
+  type TransactionFormPayload,
+} from "./transaction-edit-modal";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Suspense,
@@ -388,6 +392,11 @@ function DashboardClientImpl({
     useState<GmailFullMessagePreview | null>(null);
   const [editTx, setEditTx] = useState<TransactionJson | null>(null);
   const [editSaving, setEditSaving] = useState(false);
+  const [createTxOpen, setCreateTxOpen] = useState(false);
+  const [createSaving, setCreateSaving] = useState(false);
+  const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(() => new Set());
+  const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
+  const txHeaderSelectRef = useRef<HTMLInputElement>(null);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
   const [merchantFilter, setMerchantFilter] = useState("");
@@ -571,6 +580,42 @@ function DashboardClientImpl({
     });
     return rows;
   }, [filteredTransactions, txSort]);
+
+  const selectedTxCount = selectedTxIds.size;
+  const multiRowSelect = selectedTxCount > 1;
+
+  useEffect(() => {
+    if (activeTab !== "transactions") {
+      setSelectedTxIds(new Set());
+      setCreateTxOpen(false);
+      if (!editSaving) setEditTx(null);
+    }
+  }, [activeTab, editSaving]);
+
+  useEffect(() => {
+    const allowed = new Set(transactions.map((t) => t.id));
+    setSelectedTxIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (allowed.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [transactions]);
+
+  useEffect(() => {
+    const el = txHeaderSelectRef.current;
+    if (!el) return;
+    const n = displayedTransactions.length;
+    if (n === 0) {
+      el.indeterminate = false;
+      return;
+    }
+    const c = displayedTransactions.filter((tx) => selectedTxIds.has(tx.id)).length;
+    el.indeterminate = c > 0 && c < n;
+  }, [displayedTransactions, selectedTxIds]);
 
   const onTxSortHeaderClick = useCallback((column: TransactionSortColumn) => {
     setTxSort((prev) =>
@@ -1328,6 +1373,12 @@ function DashboardClientImpl({
       const res = await fetch(`/api/transactions/${id}`, { method: "DELETE" });
       const data = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(data.error ?? "Failed to delete transaction");
+      setSelectedTxIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       setMessage("Transaction deleted.");
       await load();
       await loadGmailReset();
@@ -1337,6 +1388,76 @@ function DashboardClientImpl({
       );
     } finally {
       setDeleteBusyId(null);
+    }
+  }
+
+  function toggleTxRowSelected(id: string) {
+    setSelectedTxIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllDisplayed() {
+    const ids = displayedTransactions.map((t) => t.id);
+    if (ids.length === 0) return;
+    const allOn = ids.every((id) => selectedTxIds.has(id));
+    setSelectedTxIds((prev) => {
+      const next = new Set(prev);
+      if (allOn) for (const id of ids) next.delete(id);
+      else for (const id of ids) next.add(id);
+      return next;
+    });
+  }
+
+  async function onCreateTransaction(payload: TransactionFormPayload) {
+    setCreateSaving(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Failed to create transaction");
+      setCreateTxOpen(false);
+      setMessage("Transaction added.");
+      await load({ preserveMessage: true });
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Failed to create transaction");
+    } finally {
+      setCreateSaving(false);
+    }
+  }
+
+  async function onBulkDeleteTransactions() {
+    const ids = [...selectedTxIds];
+    if (ids.length === 0) return;
+    const ok = window.confirm(
+      `Delete ${ids.length} transaction${ids.length === 1 ? "" : "s"}? If any came from Gmail, you can import those messages again.`,
+    );
+    if (!ok) return;
+    setBulkDeleteBusy(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/transactions/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = (await res.json()) as { error?: string; deleted?: number };
+      if (!res.ok) throw new Error(data.error ?? "Failed to delete transactions");
+      setSelectedTxIds(new Set());
+      setMessage(`Deleted ${data.deleted ?? 0} transaction(s).`);
+      await load({ preserveMessage: true });
+      await loadGmailReset();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Failed to delete transactions");
+    } finally {
+      setBulkDeleteBusy(false);
     }
   }
 
@@ -1876,11 +1997,64 @@ function DashboardClientImpl({
                   </label>
                 </div>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditTx(null);
+                    setCreateTxOpen(true);
+                  }}
+                  className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                >
+                  Add transaction
+                </button>
+                {selectedTxCount > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={bulkDeleteBusy}
+                      onClick={() => void onBulkDeleteTransactions()}
+                      className="h-9 rounded-lg border border-red-300 px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800/60 dark:text-red-300 dark:hover:bg-red-900/20"
+                    >
+                      {bulkDeleteBusy
+                        ? "Deleting…"
+                        : `Delete selected (${selectedTxCount})`}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bulkDeleteBusy}
+                      onClick={() => setSelectedTxIds(new Set())}
+                      className="h-9 rounded-lg border border-zinc-300 px-3 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-900/40"
+                    >
+                      Clear selection
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-left text-sm">
+              <table className="w-full min-w-[720px] text-left text-sm">
                 <thead className="border-b border-zinc-200 bg-zinc-50 text-xs uppercase text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/40">
                   <tr>
+                    <th scope="col" className="w-10 px-2 py-3">
+                      <span className="sr-only">Select row</span>
+                      <input
+                        ref={txHeaderSelectRef}
+                        type="checkbox"
+                        disabled={
+                          loading ||
+                          displayedTransactions.length === 0 ||
+                          bulkDeleteBusy
+                        }
+                        checked={
+                          displayedTransactions.length > 0 &&
+                          displayedTransactions.every((t) => selectedTxIds.has(t.id))
+                        }
+                        onChange={toggleSelectAllDisplayed}
+                        className="h-4 w-4 rounded border-zinc-300 text-zinc-900 dark:border-zinc-600"
+                        aria-label="Select all visible rows"
+                      />
+                    </th>
                     <TransactionSortHeader
                       column="date"
                       activeColumn={txSort.column}
@@ -1930,19 +2104,19 @@ function DashboardClientImpl({
                 <tbody>
                   {loading ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-zinc-500">
+                      <td colSpan={7} className="px-4 py-8 text-center text-zinc-500">
                         Loading…
                       </td>
                     </tr>
                   ) : transactions.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-zinc-500">
+                      <td colSpan={7} className="px-4 py-8 text-center text-zinc-500">
                         No transactions in this range
                       </td>
                     </tr>
                   ) : displayedTransactions.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-zinc-500">
+                      <td colSpan={7} className="px-4 py-8 text-center text-zinc-500">
                         No transactions match your filters
                       </td>
                     </tr>
@@ -1952,6 +2126,16 @@ function DashboardClientImpl({
                         key={tx.id}
                         className="border-b border-zinc-100 dark:border-zinc-800/80"
                       >
+                        <td className="px-2 py-3 align-middle">
+                          <input
+                            type="checkbox"
+                            checked={selectedTxIds.has(tx.id)}
+                            onChange={() => toggleTxRowSelected(tx.id)}
+                            disabled={bulkDeleteBusy}
+                            className="h-4 w-4 rounded border-zinc-300 text-zinc-900 dark:border-zinc-600"
+                            aria-label={`Select ${tx.merchant ?? "transaction"}`}
+                          />
+                        </td>
                         <td className="px-4 py-3 tabular-nums text-zinc-600 dark:text-zinc-400">
                           {new Date(tx.occurredAt).toLocaleString()}
                         </td>
@@ -1995,8 +2179,17 @@ function DashboardClientImpl({
                           <div className="inline-flex flex-wrap items-center justify-end gap-2">
                             <button
                               type="button"
-                              onClick={() => setEditTx(tx)}
-                              className="h-8 rounded-md border border-zinc-300 px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900/40"
+                              disabled={multiRowSelect}
+                              title={
+                                multiRowSelect
+                                  ? "Clear multi-select to edit one transaction at a time"
+                                  : undefined
+                              }
+                              onClick={() => {
+                                setCreateTxOpen(false);
+                                setEditTx(tx);
+                              }}
+                              className="h-8 rounded-md border border-zinc-300 px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900/40"
                             >
                               Edit
                             </button>
@@ -2082,7 +2275,8 @@ function DashboardClientImpl({
         detail={sourceEmailDetail}
       />
       <TransactionEditModal
-        key={editTx?.id ?? "no-edit"}
+        key="edit-modal"
+        variant="edit"
         open={Boolean(editTx)}
         tx={editTx}
         categories={categories}
@@ -2091,6 +2285,17 @@ function DashboardClientImpl({
           if (!editSaving) setEditTx(null);
         }}
         onSave={onSaveTransactionEdit}
+      />
+      <TransactionEditModal
+        key="create-modal"
+        variant="create"
+        open={createTxOpen}
+        categories={categories}
+        saving={createSaving}
+        onClose={() => {
+          if (!createSaving) setCreateTxOpen(false);
+        }}
+        onCreate={onCreateTransaction}
       />
     </>
   );
