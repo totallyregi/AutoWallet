@@ -27,7 +27,11 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
 const patchSchema = z.object({
   amount: z.number().positive(),
-  currency: z.string().trim().min(1).max(8),
+  currency: z
+    .string()
+    .trim()
+    .transform((s) => s.toUpperCase())
+    .pipe(z.enum(["USD", "SGD", "EUR"])),
   occurredAt: z.string().datetime(),
   merchant: z.string().trim().max(500).nullable().optional(),
   notes: z.string().trim().max(2000).nullable().optional(),

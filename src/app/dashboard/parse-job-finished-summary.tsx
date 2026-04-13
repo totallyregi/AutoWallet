@@ -1,5 +1,6 @@
 "use client";
 
+import { useDisplayCurrency } from "@/lib/display-currency-context";
 import type { ParseJobConfig, ParseJobResultRow } from "./parse-job-types";
 
 export type ParseFinishedJobGmail = {
@@ -144,6 +145,7 @@ function ParsedTransactionLines({
   row: ParseJobResultRow;
   parseTransactionActions?: ParseTransactionActionsProps;
 }) {
+  const { formatMoney } = useDisplayCurrency();
   const lines = row.createdTransactions;
   if (!lines?.length) return null;
   return (
@@ -159,10 +161,7 @@ function ParsedTransactionLines({
             </span>
             {" · "}
             {tx.merchant || "Unknown merchant"} ·{" "}
-            {new Intl.NumberFormat(undefined, {
-              style: "currency",
-              currency: tx.currency || "USD",
-            }).format(tx.amount)}
+            {formatMoney(tx.amount, tx.currency ?? "USD")}
           </span>
           {parseTransactionActions?.enabled && tx.id ? (
             <span className="inline-flex shrink-0 gap-1">

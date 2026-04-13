@@ -15,6 +15,14 @@ export type TransactionFormPayload = {
   needsReview: boolean;
 };
 
+const TX_CURRENCIES = ["USD", "SGD", "EUR"] as const;
+type TxCurrency = (typeof TX_CURRENCIES)[number];
+
+function normalizeTxCurrency(raw: string | undefined): TxCurrency {
+  const u = (raw || "USD").toUpperCase();
+  return (TX_CURRENCIES as readonly string[]).includes(u) ? (u as TxCurrency) : "USD";
+}
+
 function localDatetimeInputValue(d: Date): string {
   const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
@@ -46,7 +54,7 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
   const tx = isCreate ? null : props.tx;
 
   const [amount, setAmount] = useState("");
-  const [currency, setCurrency] = useState("USD");
+  const [currency, setCurrency] = useState<TxCurrency>("USD");
   const [occurredAt, setOccurredAt] = useState("");
   const [merchant, setMerchant] = useState("");
   const [notes, setNotes] = useState("");
@@ -55,25 +63,27 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
 
   useEffect(() => {
     if (!open) return;
-    if (isCreate) {
-      setAmount("");
-      setCurrency("USD");
-      setOccurredAt(localDatetimeInputValue(new Date()));
-      setMerchant("");
-      setNotes("");
-      setCategoryId("");
-      setNeedsReview(false);
-      return;
-    }
-    if (tx) {
-      setAmount(String(tx.amount));
-      setCurrency((tx.currency || "USD").toUpperCase());
-      setOccurredAt(tx.occurredAt.slice(0, 16));
-      setMerchant(tx.merchant ?? "");
-      setNotes(tx.notes ?? "");
-      setCategoryId(tx.category?.id ?? "");
-      setNeedsReview(tx.needsReview);
-    }
+    queueMicrotask(() => {
+      if (isCreate) {
+        setAmount("");
+        setCurrency("USD");
+        setOccurredAt(localDatetimeInputValue(new Date()));
+        setMerchant("");
+        setNotes("");
+        setCategoryId("");
+        setNeedsReview(false);
+        return;
+      }
+      if (tx) {
+        setAmount(String(tx.amount));
+        setCurrency(normalizeTxCurrency(tx.currency));
+        setOccurredAt(tx.occurredAt.slice(0, 16));
+        setMerchant(tx.merchant ?? "");
+        setNotes(tx.notes ?? "");
+        setCategoryId(tx.category?.id ?? "");
+        setNeedsReview(tx.needsReview);
+      }
+    });
   }, [open, isCreate, tx]);
 
   if (!open) return null;
@@ -86,7 +96,7 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
     if (!occurredAt) return;
     const payload: TransactionFormPayload = {
       amount: parsedAmount,
-      currency: currency.trim().toUpperCase(),
+      currency,
       occurredAt: new Date(occurredAt).toISOString(),
       merchant: merchant.trim() || null,
       notes: notes.trim() || null,
@@ -143,13 +153,18 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
             </label>
             <label className="text-sm">
               <span className="mb-1 block text-xs text-zinc-500">Currency</span>
-              <input
-                className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm uppercase dark:border-zinc-700 dark:bg-zinc-950"
+              <select
+                className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-950"
                 value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-                maxLength={8}
+                onChange={(e) => setCurrency(e.target.value as TxCurrency)}
                 required
-              />
+              >
+                {TX_CURRENCIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
 

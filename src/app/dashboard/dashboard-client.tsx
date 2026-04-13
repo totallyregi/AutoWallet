@@ -29,6 +29,8 @@ import {
   type CategoryOption,
   type TransactionFormPayload,
 } from "./transaction-edit-modal";
+import { useTheme } from "@/components/theme-provider";
+import { useDisplayCurrency } from "@/lib/display-currency-context";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Suspense,
@@ -68,6 +70,7 @@ const TABS = [
   { id: "capture", label: "Capture" },
   { id: "transactions", label: "Transactions" },
   { id: "parse-history", label: "Parse history" },
+  { id: "settings", label: "Settings" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -330,6 +333,13 @@ function DashboardClientImpl({
     () => tabFromSearchParam(searchParams.get("tab")),
     [searchParams],
   );
+
+  const {
+    formatMoney,
+    formatMoneyFromUsdAggregate,
+    formatCompactFromUsdAggregate,
+  } = useDisplayCurrency();
+  const { theme, setTheme } = useTheme();
 
   const setActiveTab = useCallback(
     (tab: TabId) => {
@@ -1061,9 +1071,7 @@ function DashboardClientImpl({
         );
         setPasteText("");
       } else {
-        showParseSuccessToast(
-          "Text parsed and saved — see Transactions (source: Pasted text).",
-        );
+        showParseSuccessToast("Text parsed and saved.");
         setPasteText("");
       }
     }
@@ -1594,12 +1602,6 @@ function DashboardClientImpl({
       value: b.amount,
     })) ?? [];
 
-  const fmtUsd = (n: number) =>
-    new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: "USD",
-    }).format(n);
-
   const tabButtonClass = (tabId: (typeof TABS)[number]["id"]) =>
     `rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200 ${
       activeTab === tabId
@@ -1680,14 +1682,18 @@ function DashboardClientImpl({
               <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
                 <h2 className="text-sm font-medium text-zinc-500">Average</h2>
                 <p className="mt-1 text-2xl font-semibold tabular-nums">
-                  {loading ? "…" : fmtUsd(summary?.averageTransaction ?? 0)}
+                  {loading
+                    ? "…"
+                    : formatMoneyFromUsdAggregate(summary?.averageTransaction ?? 0)}
                 </p>
                 <p className="mt-2 text-xs text-zinc-500">Per spend transaction</p>
               </div>
               <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
                 <h2 className="text-sm font-medium text-zinc-500">Largest</h2>
                 <p className="mt-1 text-2xl font-semibold tabular-nums">
-                  {loading ? "…" : fmtUsd(summary?.maxSingle ?? 0)}
+                  {loading
+                    ? "…"
+                    : formatMoneyFromUsdAggregate(summary?.maxSingle ?? 0)}
                 </p>
                 <p className="mt-2 text-xs text-zinc-500">Single largest charge</p>
               </div>
@@ -1704,7 +1710,9 @@ function DashboardClientImpl({
               <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
                 <h2 className="mb-1 text-lg font-medium">Total spend</h2>
                 <p className="text-3xl font-semibold tabular-nums">
-                  {loading ? "…" : fmtUsd(summary?.total ?? 0)}
+                  {loading
+                    ? "…"
+                    : formatMoneyFromUsdAggregate(summary?.total ?? 0)}
                 </p>
                 <p className="mt-2 text-xs text-zinc-500">
                   Range: {new Date(range.from).toLocaleDateString()} —{" "}
@@ -1731,7 +1739,11 @@ function DashboardClientImpl({
                             <Cell key={i} fill={COLORS[i % COLORS.length]} />
                           ))}
                         </Pie>
-                        <Tooltip formatter={(value) => fmtUsd(Number(value ?? 0))} />
+                        <Tooltip
+                          formatter={(value) =>
+                            formatMoneyFromUsdAggregate(Number(value ?? 0))
+                          }
+                        />
                       </PieChart>
                     </ResponsiveContainer>
                   ) : (
@@ -1746,7 +1758,8 @@ function DashboardClientImpl({
                       <li key={b.slug + b.name} className="flex justify-between gap-4">
                         <span className="text-zinc-700 dark:text-zinc-300">{b.name}</span>
                         <span className="tabular-nums text-zinc-600 dark:text-zinc-400">
-                          {b.percentage}% · {fmtUsd(b.amount)}
+                          {b.percentage}% ·{" "}
+                          {formatMoneyFromUsdAggregate(b.amount)}
                         </span>
                       </li>
                     ))}
@@ -1778,13 +1791,14 @@ function DashboardClientImpl({
                           tick={{ fontSize: 11, fill: "currentColor" }}
                           className="text-zinc-500"
                           tickFormatter={(v) =>
-                            new Intl.NumberFormat(undefined, {
-                              notation: "compact",
-                              maximumFractionDigits: 1,
-                            }).format(Number(v))
+                            formatCompactFromUsdAggregate(Number(v))
                           }
                         />
-                        <Tooltip formatter={(value) => fmtUsd(Number(value ?? 0))} />
+                        <Tooltip
+                          formatter={(value) =>
+                            formatMoneyFromUsdAggregate(Number(value ?? 0))
+                          }
+                        />
                         <Bar dataKey="amount" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
@@ -1815,7 +1829,11 @@ function DashboardClientImpl({
                             <Cell key={i} fill={COLORS[(i + 2) % COLORS.length]} />
                           ))}
                         </Pie>
-                        <Tooltip formatter={(value) => fmtUsd(Number(value ?? 0))} />
+                        <Tooltip
+                          formatter={(value) =>
+                            formatMoneyFromUsdAggregate(Number(value ?? 0))
+                          }
+                        />
                       </PieChart>
                     </ResponsiveContainer>
                   ) : (
@@ -1830,7 +1848,8 @@ function DashboardClientImpl({
                       <li key={b.source} className="flex justify-between gap-4">
                         <span className="text-zinc-700 dark:text-zinc-300">{b.name}</span>
                         <span className="tabular-nums text-zinc-600 dark:text-zinc-400">
-                          {b.percentage}% · {fmtUsd(b.amount)}
+                          {b.percentage}% ·{" "}
+                          {formatMoneyFromUsdAggregate(b.amount)}
                         </span>
                       </li>
                     ))}
@@ -1852,7 +1871,7 @@ function DashboardClientImpl({
                         {row.name}
                       </span>
                       <span className="shrink-0 tabular-nums text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                        {fmtUsd(row.amount)}
+                        {formatMoneyFromUsdAggregate(row.amount)}
                       </span>
                     </li>
                   ))}
@@ -1915,14 +1934,15 @@ function DashboardClientImpl({
         )}
 
         {activeTab === "capture" && (
-          <section className="fade-slide-in grid gap-6 lg:grid-cols-2">
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          <section className="fade-slide-in grid gap-6 lg:grid-cols-2 lg:items-stretch">
+            <div className="flex h-full min-h-0 flex-col rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
               <h2 className="mb-3 text-lg font-medium">Upload receipt</h2>
-              <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
-                Add a photo, screenshot, or PDF — each file is parsed to create a
-                transaction. Up to {MAX_CAPTURE_RECEIPTS} files at once, 12 MB each.
+              <p className="mb-4 min-h-[2.75rem] text-sm leading-snug text-zinc-600 dark:text-zinc-400">
+                Add a photo, screenshot, or PDF.
+                <br />
+                Up to {MAX_CAPTURE_RECEIPTS} files at once, 12 MB each.
               </p>
-              <div className="flex flex-col gap-3">
+              <div className="mt-auto flex min-h-0 flex-col gap-3">
                 <input
                   ref={receiptFileInputRef}
                   id="capture-receipt-input"
@@ -1974,19 +1994,17 @@ function DashboardClientImpl({
                 </button>
               </div>
             </div>
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <h2 className="mb-3 text-lg font-medium">Paste email or message text</h2>
-              <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
-                Paste a bank email, notification, or any text receipt (for example
-                from messages). The text is parsed to create a transaction listed under
-                Transactions with source{" "}
-                <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                  Pasted text
-                </span>
-                . If it does not appear, widen the date range card above (the saved date
-                follows the receipt when we can read it).
+            <div className="flex h-full min-h-0 flex-col rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+              <h2 className="mb-3 text-lg font-medium">Paste text</h2>
+              <p className="mb-4 min-h-[2.75rem] text-sm leading-snug text-zinc-600 dark:text-zinc-400">
+                Paste bank or card notification text here.
+                <br />
+                Press Parse when you are ready.
               </p>
-              <form onSubmit={onPasteSubmit} className="flex flex-col gap-3">
+              <form
+                onSubmit={onPasteSubmit}
+                className="mt-auto flex min-h-0 flex-col gap-3"
+              >
                 <textarea
                   className="min-h-[120px] w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
                   placeholder="Subject: … or paste notification text"
@@ -2015,53 +2033,17 @@ function DashboardClientImpl({
                 </p>
               </div>
               <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/30">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                      Filter rows
-                    </p>
-                    <button
-                      type="button"
-                      onClick={clearTxFilters}
-                      className="text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
-                    >
-                      Clear filters
-                    </button>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditTx(null);
-                        setCreateTxOpen(true);
-                      }}
-                      className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-                    >
-                      Add transaction
-                    </button>
-                    {selectedTxCount > 0 && (
-                      <>
-                        <button
-                          type="button"
-                          disabled={bulkDeleteBusy}
-                          onClick={() => void onBulkDeleteTransactions()}
-                          className="h-9 rounded-lg border border-red-300 px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800/60 dark:text-red-300 dark:hover:bg-red-900/20"
-                        >
-                          {bulkDeleteBusy
-                            ? "Deleting…"
-                            : `Delete selected (${selectedTxCount})`}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={bulkDeleteBusy}
-                          onClick={() => setSelectedTxIds(new Set())}
-                          className="h-9 rounded-lg border border-zinc-300 px-3 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-900/40"
-                        >
-                          Clear selection
-                        </button>
-                      </>
-                    )}
-                  </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                    Filter rows
+                  </p>
+                  <button
+                    type="button"
+                    onClick={clearTxFilters}
+                    className="text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
+                  >
+                    Clear filters
+                  </button>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                   <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
@@ -2151,6 +2133,40 @@ function DashboardClientImpl({
                     </select>
                   </label>
                 </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditTx(null);
+                    setCreateTxOpen(true);
+                  }}
+                  className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                >
+                  Add transaction
+                </button>
+                {selectedTxCount > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={bulkDeleteBusy}
+                      onClick={() => void onBulkDeleteTransactions()}
+                      className="h-9 rounded-lg border border-red-300 px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800/60 dark:text-red-300 dark:hover:bg-red-900/20"
+                    >
+                      {bulkDeleteBusy
+                        ? "Deleting…"
+                        : `Delete selected (${selectedTxCount})`}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bulkDeleteBusy}
+                      onClick={() => setSelectedTxIds(new Set())}
+                      className="h-9 rounded-lg border border-zinc-300 px-3 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-900/40"
+                    >
+                      Clear selection
+                    </button>
+                  </>
+                )}
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -2301,10 +2317,7 @@ function DashboardClientImpl({
                           )}
                         </td>
                         <td className="px-4 py-3 text-right font-medium tabular-nums">
-                          {new Intl.NumberFormat(undefined, {
-                            style: "currency",
-                            currency: tx.currency || "USD",
-                          }).format(tx.amount)}
+                          {formatMoney(tx.amount, tx.currency)}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="inline-flex flex-wrap items-center justify-end gap-2">
@@ -2351,6 +2364,65 @@ function DashboardClientImpl({
               setForceOpenEmailId(id);
             }}
           />
+        )}
+
+        {activeTab === "settings" && (
+          <section className="fade-slide-in max-w-xl space-y-8 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <div>
+              <h2 className="text-lg font-medium">Settings</h2>
+              <p className="mt-1 text-xs text-zinc-500">
+                Appearance and display preferences for this browser.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <h3 className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                Theme
+              </h3>
+              <p className="text-xs text-zinc-500">
+                Default is dark. Your choice is saved in this browser only.
+              </p>
+              <div
+                className="inline-flex rounded-xl border border-zinc-200 p-1 dark:border-zinc-700"
+                role="group"
+                aria-label="Color theme"
+              >
+                <button
+                  type="button"
+                  onClick={() => setTheme("light")}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                    theme === "light"
+                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-900/60"
+                  }`}
+                >
+                  Light
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTheme("dark")}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                    theme === "dark"
+                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-900/60"
+                  }`}
+                >
+                  Dark
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2 border-t border-zinc-100 pt-6 dark:border-zinc-800">
+              <h3 className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                Display currency
+              </h3>
+              <p className="text-xs leading-snug text-zinc-500">
+                Each row uses its stored currency and is converted to the header
+                currency for display (Frankfurter rates).
+                <br />
+                Overview totals are shown as one rescaled figure, not a mixed-currency
+                ledger sum. Change currency from the header anytime.
+              </p>
+            </div>
+          </section>
         )}
       </div>
     </div>
