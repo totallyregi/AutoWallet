@@ -1,6 +1,10 @@
 "use client";
 
-import { ParseJobFinishedSummary, jobViewFromParseJobConfig } from "./parse-job-finished-summary";
+import {
+  ParseJobFinishedSummary,
+  jobViewFromParseJobConfig,
+  type ParseTransactionActionsProps,
+} from "./parse-job-finished-summary";
 import type { ParseJobConfig, ParseJobResultRow } from "./parse-job-types";
 
 export type {
@@ -19,6 +23,7 @@ type ParseJobModalProps = {
   results: ParseJobResultRow[];
   job: ParseJobConfig | null;
   onClose: () => void;
+  parseTransactionActions?: ParseTransactionActionsProps;
 };
 
 function modalTitles(
@@ -96,6 +101,7 @@ export function ParseJobModal({
   results,
   job,
   onClose,
+  parseTransactionActions,
 }: ParseJobModalProps) {
   if (!open || !job) return null;
 
@@ -213,6 +219,7 @@ export function ParseJobModal({
             <ParseJobFinishedSummary
               job={jobViewFromParseJobConfig(job)}
               results={results}
+              parseTransactionActions={parseTransactionActions}
             />
           )}
         </div>

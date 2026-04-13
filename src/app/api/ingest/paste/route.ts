@@ -5,6 +5,18 @@ import {
   parseOccurredAt,
   resolveCategoryId,
 } from "@/lib/gemini";
+
+/** Keep pasted rows visible with typical dashboard year filters when the model picks a far past/future date. */
+function clampPasteOccurredAt(parsed: Date, now = new Date()): Date {
+  if (Number.isNaN(parsed.getTime())) return now;
+  const min = new Date(now);
+  min.setUTCFullYear(min.getUTCFullYear() - 5);
+  const max = new Date(now);
+  max.setUTCMonth(max.getUTCMonth() + 18);
+  const t = parsed.getTime();
+  if (t < min.getTime() || t > max.getTime()) return now;
+  return parsed;
+}
 import prisma from "@/lib/prisma";
 import { transactionToJson } from "@/lib/transaction-json";
 import { createHash } from "crypto";
@@ -48,15 +60,18 @@ export async function POST(req: NextRequest) {
   const confidence = extracted.confidence ?? 0.75;
   const needsReview = confidence < 0.6;
 
+  const occurredRaw = parseOccurredAt(extracted.date);
+  const occurredAt = clampPasteOccurredAt(occurredRaw);
+
   const tx = await prisma.transaction.create({
     data: {
       userId: session.user.id,
       amount: extracted.amount,
       currency: extracted.currency,
-      occurredAt: parseOccurredAt(extracted.date),
+      occurredAt,
       merchant: extracted.merchant ?? undefined,
       notes: extracted.notes ?? undefined,
-      source: "email",
+      source: "text",
       rawSnippet: text.slice(0, 4000),
       externalId,
       confidence,

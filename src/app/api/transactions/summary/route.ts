@@ -122,7 +122,9 @@ export async function GET(req: NextRequest) {
           ? "Receipt scan"
           : src === "manual"
             ? "Manual"
-            : String(src);
+            : src === "text"
+              ? "Pasted text"
+              : String(src);
     return { source: src, name, amount: amt, percentage: 0 };
   });
   for (const b of bySource) {

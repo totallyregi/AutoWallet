@@ -1,6 +1,8 @@
 import type { GmailTableRow } from "./gmail-types";
 
 export type ParseJobResultLine = {
+  /** Present when this line maps to a stored row (enables edit/delete in the parse modal). */
+  id?: string;
   merchant: string | null;
   amount: number;
   currency: string;

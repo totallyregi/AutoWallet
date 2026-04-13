@@ -102,6 +102,7 @@ const MAX_RECEIPT_FILE_BYTES = 12 * 1024 * 1024;
 function transactionToResultLines(tx: TransactionJson): ParseJobResultLine[] {
   return [
     {
+      id: tx.id,
       merchant: tx.merchant,
       amount: tx.amount,
       currency: tx.currency,
@@ -396,13 +397,16 @@ function DashboardClientImpl({
   const [createSaving, setCreateSaving] = useState(false);
   const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(() => new Set());
   const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
+  const [parseSummaryDeleteBusyId, setParseSummaryDeleteBusyId] = useState<
+    string | null
+  >(null);
   const txHeaderSelectRef = useRef<HTMLInputElement>(null);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
   const [merchantFilter, setMerchantFilter] = useState("");
   const [categoryFilterId, setCategoryFilterId] = useState("");
   const [sourceFilter, setSourceFilter] = useState<
-    "" | "email" | "image" | "manual"
+    "" | "email" | "image" | "manual" | "text"
   >("");
   const [minAmountInput, setMinAmountInput] = useState("");
   const [maxAmountInput, setMaxAmountInput] = useState("");
@@ -1057,7 +1061,9 @@ function DashboardClientImpl({
         );
         setPasteText("");
       } else {
-        showParseSuccessToast("Text parsed and saved.");
+        showParseSuccessToast(
+          "Text parsed and saved — see Transactions (source: Pasted text).",
+        );
         setPasteText("");
       }
     }
@@ -1132,6 +1138,7 @@ function DashboardClientImpl({
       parseStatus?: "open" | "partial" | "complete";
       skippedDeclined?: boolean;
       createdTransactions?: {
+        id?: string;
         merchant: string | null;
         amount: number;
         currency: string;
@@ -1332,6 +1339,105 @@ function DashboardClientImpl({
     setSourceEmailDetail(null);
   }
 
+  function patchParseResultLineFromSave(payload: {
+    id: string;
+    amount: number;
+    currency: string;
+    occurredAt: string;
+    merchant: string | null;
+    notes: string | null;
+    categoryId: string | null;
+    needsReview: boolean;
+  }) {
+    setBatchResults((rows) =>
+      rows.map((row) => ({
+        ...row,
+        createdTransactions: row.createdTransactions?.map((line) =>
+          line.id === payload.id
+            ? {
+                ...line,
+                merchant: payload.merchant,
+                amount: payload.amount,
+                currency: payload.currency,
+                occurredAt: payload.occurredAt,
+              }
+            : line,
+        ),
+      })),
+    );
+  }
+
+  function removeParseResultTransactionLine(sourceId: string, lineIndex: number) {
+    setBatchResults((rows) =>
+      rows.map((row) => {
+        if (row.sourceId !== sourceId) return row;
+        const lines = row.createdTransactions ?? [];
+        if (lineIndex < 0 || lineIndex >= lines.length) return row;
+        const nextLines = lines.filter((_, i) => i !== lineIndex);
+        return {
+          ...row,
+          createdTransactions: nextLines,
+          createdCount: Math.max(0, (row.createdCount ?? 1) - 1),
+        };
+      }),
+    );
+  }
+
+  async function openEditFromParseSummary(transactionId: string) {
+    let tx = transactions.find((t) => t.id === transactionId);
+    if (!tx) {
+      setMessage(null);
+      try {
+        const res = await fetch(
+          `/api/transactions/${encodeURIComponent(transactionId)}`,
+        );
+        const data = (await res.json()) as {
+          error?: string;
+          transaction?: TransactionJson;
+        };
+        if (!res.ok) throw new Error(data.error ?? "Not found");
+        tx = data.transaction;
+      } catch (e) {
+        setMessage(
+          e instanceof Error
+            ? e.message
+            : "Could not load that transaction for editing.",
+        );
+        return;
+      }
+    }
+    if (!tx) return;
+    setCreateTxOpen(false);
+    setEditTx(tx);
+  }
+
+  async function onDeleteFromParseSummary(
+    transactionId: string,
+    ctx: { sourceId: string; lineIndex: number },
+  ) {
+    const ok = window.confirm(
+      "Delete this transaction? If it came from Gmail, you can parse the message again.",
+    );
+    if (!ok) return;
+    setParseSummaryDeleteBusyId(transactionId);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/transactions/${transactionId}`, {
+        method: "DELETE",
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Failed to delete transaction");
+      removeParseResultTransactionLine(ctx.sourceId, ctx.lineIndex);
+      setMessage("Transaction deleted.");
+      await load({ preserveMessage: true });
+      await loadGmailReset();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Failed to delete transaction");
+    } finally {
+      setParseSummaryDeleteBusyId(null);
+    }
+  }
+
   async function onSaveTransactionEdit(payload: {
     id: string;
     amount: number;
@@ -1354,6 +1460,7 @@ function DashboardClientImpl({
       if (!res.ok) throw new Error(data.error ?? "Failed to update transaction");
       setEditTx(null);
       setMessage("Transaction updated.");
+      patchParseResultLineFromSave(payload);
       await load({ preserveMessage: true });
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Failed to update transaction");
@@ -1871,7 +1978,13 @@ function DashboardClientImpl({
               <h2 className="mb-3 text-lg font-medium">Paste email or message text</h2>
               <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">
                 Paste a bank email, notification, or any text receipt (for example
-                from messages). The text is parsed to create a transaction.
+                from messages). The text is parsed to create a transaction listed under
+                Transactions with source{" "}
+                <span className="font-medium text-zinc-800 dark:text-zinc-200">
+                  Pasted text
+                </span>
+                . If it does not appear, widen the date range card above (the saved date
+                follows the receipt when we can read it).
               </p>
               <form onSubmit={onPasteSubmit} className="flex flex-col gap-3">
                 <textarea
@@ -1902,17 +2015,53 @@ function DashboardClientImpl({
                 </p>
               </div>
               <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-zinc-50/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/30">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                    Filter rows
-                  </p>
-                  <button
-                    type="button"
-                    onClick={clearTxFilters}
-                    className="text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
-                  >
-                    Clear filters
-                  </button>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      Filter rows
+                    </p>
+                    <button
+                      type="button"
+                      onClick={clearTxFilters}
+                      className="text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
+                    >
+                      Clear filters
+                    </button>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditTx(null);
+                        setCreateTxOpen(true);
+                      }}
+                      className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                    >
+                      Add transaction
+                    </button>
+                    {selectedTxCount > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={bulkDeleteBusy}
+                          onClick={() => void onBulkDeleteTransactions()}
+                          className="h-9 rounded-lg border border-red-300 px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800/60 dark:text-red-300 dark:hover:bg-red-900/20"
+                        >
+                          {bulkDeleteBusy
+                            ? "Deleting…"
+                            : `Delete selected (${selectedTxCount})`}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={bulkDeleteBusy}
+                          onClick={() => setSelectedTxIds(new Set())}
+                          className="h-9 rounded-lg border border-zinc-300 px-3 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-900/40"
+                        >
+                          Clear selection
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                   <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
@@ -1947,14 +2096,20 @@ function DashboardClientImpl({
                       value={sourceFilter}
                       onChange={(e) =>
                         setSourceFilter(
-                          e.target.value as "" | "email" | "image" | "manual",
+                          e.target.value as
+                            | ""
+                            | "email"
+                            | "image"
+                            | "manual"
+                            | "text",
                         )
                       }
                     >
                       <option value="">All</option>
-                      <option value="email">Email</option>
-                      <option value="image">Image</option>
-                      <option value="manual">Manual</option>
+                      <option value="email">Email (Gmail)</option>
+                      <option value="image">Image / receipt</option>
+                      <option value="text">Pasted text</option>
+                      <option value="manual">Manual entry</option>
                     </select>
                   </label>
                   <label className="flex flex-col gap-1 text-xs font-medium text-zinc-500">
@@ -1996,40 +2151,6 @@ function DashboardClientImpl({
                     </select>
                   </label>
                 </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditTx(null);
-                    setCreateTxOpen(true);
-                  }}
-                  className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-                >
-                  Add transaction
-                </button>
-                {selectedTxCount > 0 && (
-                  <>
-                    <button
-                      type="button"
-                      disabled={bulkDeleteBusy}
-                      onClick={() => void onBulkDeleteTransactions()}
-                      className="h-9 rounded-lg border border-red-300 px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800/60 dark:text-red-300 dark:hover:bg-red-900/20"
-                    >
-                      {bulkDeleteBusy
-                        ? "Deleting…"
-                        : `Delete selected (${selectedTxCount})`}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={bulkDeleteBusy}
-                      onClick={() => setSelectedTxIds(new Set())}
-                      className="h-9 rounded-lg border border-zinc-300 px-3 text-sm text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-900/40"
-                    >
-                      Clear selection
-                    </button>
-                  </>
-                )}
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -2166,7 +2287,17 @@ function DashboardClientImpl({
                               Email
                             </button>
                           ) : (
-                            <span className="text-sm capitalize">{tx.source}</span>
+                            <span className="text-sm text-zinc-700 dark:text-zinc-300">
+                              {tx.source === "image"
+                                ? "Image"
+                                : tx.source === "text"
+                                  ? "Pasted text"
+                                  : tx.source === "manual"
+                                    ? "Manual"
+                                    : tx.source === "email"
+                                      ? "Email"
+                                      : tx.source}
+                            </span>
                           )}
                         </td>
                         <td className="px-4 py-3 text-right font-medium tabular-nums">
@@ -2251,6 +2382,19 @@ function DashboardClientImpl({
         currentLabel={batchCurrentLabel}
         results={batchResults}
         job={batchParseJob}
+        parseTransactionActions={
+          !batchRunning &&
+          batchResults.some((r) =>
+            (r.createdTransactions ?? []).some((line) => Boolean(line.id)),
+          )
+            ? {
+                enabled: true,
+                onEdit: openEditFromParseSummary,
+                onDelete: onDeleteFromParseSummary,
+                deleteBusyId: parseSummaryDeleteBusyId,
+              }
+            : undefined
+        }
         onClose={() => {
           if (batchRunning) return;
           setBatchParseJob((job) => {

@@ -35,7 +35,7 @@ Fields:
 - amount: number (positive, major currency units e.g. 12.99)
 - currency: string ISO code default USD
 - merchant: string or null
-- date: ISO 8601 date string (best effort from content or today)
+- date: ISO 8601 date string for when the charge happened (from the receipt or email). If the body only has an ambiguous or very old date, use today's date so the entry appears in the user's current period.
 - categorySlug: one of the allowed slugs below
 - notes: short string or null
 - confidence: number 0-1 how sure you are

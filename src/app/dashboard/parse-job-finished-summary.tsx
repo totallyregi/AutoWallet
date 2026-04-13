@@ -121,14 +121,85 @@ export function jobViewFromSnapshot(
   return { kind: "text", pastedText: snap.pastedText };
 }
 
+export type ParseTransactionActionsProps = {
+  enabled: boolean;
+  onEdit: (transactionId: string) => void | Promise<void>;
+  onDelete: (
+    transactionId: string,
+    ctx: { sourceId: string; lineIndex: number },
+  ) => void | Promise<void>;
+  deleteBusyId: string | null;
+};
+
 type ParseJobFinishedSummaryProps = {
   job: ParseFinishedJobView;
   results: ParseJobResultRow[];
+  parseTransactionActions?: ParseTransactionActionsProps;
 };
+
+function ParsedTransactionLines({
+  row,
+  parseTransactionActions,
+}: {
+  row: ParseJobResultRow;
+  parseTransactionActions?: ParseTransactionActionsProps;
+}) {
+  const lines = row.createdTransactions;
+  if (!lines?.length) return null;
+  return (
+    <ul className="mt-2 space-y-1.5">
+      {lines.map((tx, idx) => (
+        <li
+          key={tx.id ?? `${row.sourceId}-${idx}`}
+          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-zinc-100 px-2 py-1.5 dark:border-zinc-800/80"
+        >
+          <span className="min-w-0 flex-1 text-[13px] text-zinc-700 dark:text-zinc-300">
+            <span className="font-medium text-zinc-900 dark:text-zinc-100">
+              {tx.kind === "reversal" ? "Reversal" : "Charge"}
+            </span>
+            {" · "}
+            {tx.merchant || "Unknown merchant"} ·{" "}
+            {new Intl.NumberFormat(undefined, {
+              style: "currency",
+              currency: tx.currency || "USD",
+            }).format(tx.amount)}
+          </span>
+          {parseTransactionActions?.enabled && tx.id ? (
+            <span className="inline-flex shrink-0 gap-1">
+              <button
+                type="button"
+                onClick={() => parseTransactionActions.onEdit(tx.id!)}
+                className="h-7 rounded-md border border-zinc-300 px-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800/60"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                disabled={parseTransactionActions.deleteBusyId === tx.id}
+                onClick={() =>
+                  void parseTransactionActions.onDelete(tx.id!, {
+                    sourceId: row.sourceId,
+                    lineIndex: idx,
+                  })
+                }
+                className="h-7 rounded-md border border-red-300 px-2 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-800/60 dark:text-red-300 dark:hover:bg-red-900/30"
+              >
+                {parseTransactionActions.deleteBusyId === tx.id
+                  ? "…"
+                  : "Delete"}
+              </button>
+            </span>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export function ParseJobFinishedSummary({
   job,
   results,
+  parseTransactionActions,
 }: ParseJobFinishedSummaryProps) {
   return (
     <>
@@ -141,6 +212,14 @@ export function ParseJobFinishedSummary({
             {job.pastedText}
           </pre>
         </div>
+      )}
+
+      {parseTransactionActions?.enabled && (
+        <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+          Fix a bad line with <span className="font-medium">Edit</span> or{" "}
+          <span className="font-medium">Delete</span> — changes save to your account
+          immediately.
+        </p>
       )}
 
       <div className="space-y-2">
@@ -214,41 +293,19 @@ export function ParseJobFinishedSummary({
                     Created {row.createdCount ?? 0} transaction(s) from{" "}
                     {row.lineCount ?? row.createdCount ?? 0} detected line(s).
                   </p>
-                  {row.createdTransactions &&
-                    row.createdTransactions.length > 0 && (
-                      <ul className="mt-1 list-disc pl-4">
-                        {row.createdTransactions.map((tx, idx) => (
-                          <li key={`${row.sourceId}-${idx}`}>
-                            {tx.kind === "reversal" ? "Reversal" : "Charge"} ·{" "}
-                            {tx.merchant || "Unknown merchant"} ·{" "}
-                            {new Intl.NumberFormat(undefined, {
-                              style: "currency",
-                              currency: tx.currency || "USD",
-                            }).format(tx.amount)}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                  <ParsedTransactionLines
+                    row={row}
+                    parseTransactionActions={parseTransactionActions}
+                  />
                 </div>
               )}
               {row.status === "duplicate" && (
                 <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
                   <p>Already imported — no new transaction created.</p>
-                  {row.createdTransactions &&
-                    row.createdTransactions.length > 0 && (
-                      <ul className="mt-1 list-disc pl-4">
-                        {row.createdTransactions.map((tx, idx) => (
-                          <li key={`${row.sourceId}-dup-${idx}`}>
-                            {tx.kind === "reversal" ? "Reversal" : "Charge"} ·{" "}
-                            {tx.merchant || "Unknown merchant"} ·{" "}
-                            {new Intl.NumberFormat(undefined, {
-                              style: "currency",
-                              currency: tx.currency || "USD",
-                            }).format(tx.amount)}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                  <ParsedTransactionLines
+                    row={row}
+                    parseTransactionActions={parseTransactionActions}
+                  />
                 </div>
               )}
               {row.error && (

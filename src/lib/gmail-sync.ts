@@ -405,6 +405,7 @@ export async function parseAndStoreGmailMessage(
   let createdCount = 0;
   let duplicateCount = 0;
   const createdTransactions: {
+    id: string;
     merchant: string | null;
     amount: number;
     currency: string;
@@ -432,7 +433,7 @@ export async function parseAndStoreGmailMessage(
       const orig = await findOriginalChargeForReversal(userId, extracted);
 
       if (orig) {
-        await prisma.$transaction(async (db) => {
+        const createdReversal = await prisma.$transaction(async (db) => {
           await db.transaction.update({
             where: { id: orig.id },
             data: {
@@ -442,7 +443,7 @@ export async function parseAndStoreGmailMessage(
                 : "Reversed (matched email reversal).",
             },
           });
-          await db.transaction.create({
+          return db.transaction.create({
             data: {
               userId,
               amount: extracted.amount,
@@ -464,6 +465,7 @@ export async function parseAndStoreGmailMessage(
         });
         createdCount += 1;
         createdTransactions.push({
+          id: createdReversal.id,
           merchant: extracted.merchant ?? null,
           amount: extracted.amount,
           currency: extracted.currency,
@@ -473,7 +475,7 @@ export async function parseAndStoreGmailMessage(
         continue;
       }
 
-      await prisma.transaction.create({
+      const loneReversal = await prisma.transaction.create({
         data: {
           userId,
           amount: extracted.amount,
@@ -495,6 +497,7 @@ export async function parseAndStoreGmailMessage(
       });
       createdCount += 1;
       createdTransactions.push({
+        id: loneReversal.id,
         merchant: extracted.merchant ?? null,
         amount: extracted.amount,
         currency: extracted.currency,
@@ -513,9 +516,10 @@ export async function parseAndStoreGmailMessage(
       extracted.referenceId,
     );
 
+    let newChargeId: string;
     if (orphanRev) {
       const voidedNote = `${VOIDED_BY_PRIOR_REVERSAL_SUBSTRING}. Spend excluded.`;
-      await prisma.$transaction(async (db) => {
+      newChargeId = await prisma.$transaction(async (db) => {
         const charge = await db.transaction.create({
           data: {
             userId,
@@ -539,9 +543,10 @@ export async function parseAndStoreGmailMessage(
           where: { id: orphanRev.id },
           data: { reversesTransactionId: charge.id },
         });
+        return charge.id;
       });
     } else {
-      await prisma.transaction.create({
+      const createdCharge = await prisma.transaction.create({
         data: {
           userId,
           amount: extracted.amount,
@@ -557,9 +562,11 @@ export async function parseAndStoreGmailMessage(
           categoryId,
         },
       });
+      newChargeId = createdCharge.id;
     }
     createdCount += 1;
     createdTransactions.push({
+      id: newChargeId,
       merchant: extracted.merchant ?? null,
       amount: extracted.amount,
       currency: extracted.currency,
