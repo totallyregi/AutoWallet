@@ -17,6 +17,10 @@ function clampPasteOccurredAt(parsed: Date, now = new Date()): Date {
   if (t < min.getTime() || t > max.getTime()) return now;
   return parsed;
 }
+import {
+  normalizePreferredImportCurrency,
+  resolveImportAmountAndCurrency,
+} from "@/lib/import-currency-convert";
 import prisma from "@/lib/prisma";
 import { transactionToJson } from "@/lib/transaction-json";
 import { createHash } from "crypto";
@@ -63,14 +67,30 @@ export async function POST(req: NextRequest) {
   const occurredRaw = parseOccurredAt(extracted.date);
   const occurredAt = clampPasteOccurredAt(occurredRaw);
 
+  const userRow = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { preferredImportCurrency: true },
+  });
+  const importPref = normalizePreferredImportCurrency(
+    userRow?.preferredImportCurrency,
+  );
+  const resolved = await resolveImportAmountAndCurrency(
+    extracted.amount,
+    extracted.currency,
+    importPref,
+  );
+  const notesMerged = [extracted.notes, resolved.fxNote]
+    .filter((x): x is string => Boolean(x?.trim()))
+    .join(" | ");
+
   const tx = await prisma.transaction.create({
     data: {
       userId: session.user.id,
-      amount: extracted.amount,
-      currency: extracted.currency,
+      amount: resolved.amount,
+      currency: resolved.currency,
       occurredAt,
       merchant: extracted.merchant ?? undefined,
-      notes: extracted.notes ?? undefined,
+      notes: notesMerged || undefined,
       source: "text",
       rawSnippet: text.slice(0, 4000),
       externalId,

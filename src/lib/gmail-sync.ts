@@ -15,6 +15,11 @@ import {
   parseOccurredAt,
   resolveCategoryId,
 } from "@/lib/gemini";
+import {
+  applyImportWithCachedRates,
+  fetchFrankfurterUsdLatestRates,
+  normalizePreferredImportCurrency,
+} from "@/lib/import-currency-convert";
 
 export type GmailMessagePreview = {
   gmailMessageId: string;
@@ -402,6 +407,25 @@ export async function parseAndStoreGmailMessage(
     ? []
     : await extractTransactionsFromEmailText(combined);
 
+  const userRow = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { preferredImportCurrency: true },
+  });
+  const importPref = normalizePreferredImportCurrency(
+    userRow?.preferredImportCurrency,
+  );
+  const importRates = importPref ? await fetchFrankfurterUsdLatestRates() : null;
+  const packMoney = (amount: number, currency: string | null | undefined) =>
+    applyImportWithCachedRates(amount, currency, importPref, importRates);
+  const mergeImportNotes = (
+    base: string | null | undefined,
+    fx: string | null,
+  ): string | undefined => {
+    const parts = [base, fx].filter((x): x is string => Boolean(x?.trim()));
+    const s = parts.join(" | ").trim();
+    return s || undefined;
+  };
+
   let createdCount = 0;
   let duplicateCount = 0;
   const createdTransactions: {
@@ -433,6 +457,7 @@ export async function parseAndStoreGmailMessage(
       const orig = await findOriginalChargeForReversal(userId, extracted);
 
       if (orig) {
+        const m = packMoney(extracted.amount, extracted.currency);
         const createdReversal = await prisma.$transaction(async (db) => {
           await db.transaction.update({
             where: { id: orig.id },
@@ -446,11 +471,11 @@ export async function parseAndStoreGmailMessage(
           return db.transaction.create({
             data: {
               userId,
-              amount: extracted.amount,
-              currency: extracted.currency,
+              amount: m.amount,
+              currency: m.currency,
               occurredAt: parseOccurredAt(extracted.date),
               merchant: extracted.merchant ?? undefined,
-              notes: extracted.notes ?? undefined,
+              notes: mergeImportNotes(extracted.notes, m.fxNote),
               source: "email",
               rawSnippet: combined.slice(0, 4000),
               externalId,
@@ -467,24 +492,27 @@ export async function parseAndStoreGmailMessage(
         createdTransactions.push({
           id: createdReversal.id,
           merchant: extracted.merchant ?? null,
-          amount: extracted.amount,
-          currency: extracted.currency,
+          amount: m.amount,
+          currency: m.currency,
           occurredAt: parseOccurredAt(extracted.date).toISOString(),
           kind: "reversal",
         });
         continue;
       }
 
+      const mLone = packMoney(extracted.amount, extracted.currency);
       const loneReversal = await prisma.transaction.create({
         data: {
           userId,
-          amount: extracted.amount,
-          currency: extracted.currency,
+          amount: mLone.amount,
+          currency: mLone.currency,
           occurredAt: parseOccurredAt(extracted.date),
           merchant: extracted.merchant ?? undefined,
-          notes:
+          notes: mergeImportNotes(
             extracted.notes ??
-            "Reversal with no matching charge by bank reference — excluded from spend.",
+              "Reversal with no matching charge by bank reference — excluded from spend.",
+            mLone.fxNote,
+          ),
           source: "email",
           rawSnippet: combined.slice(0, 4000),
           externalId,
@@ -499,8 +527,8 @@ export async function parseAndStoreGmailMessage(
       createdTransactions.push({
         id: loneReversal.id,
         merchant: extracted.merchant ?? null,
-        amount: extracted.amount,
-        currency: extracted.currency,
+        amount: mLone.amount,
+        currency: mLone.currency,
         occurredAt: parseOccurredAt(extracted.date).toISOString(),
         kind: "reversal",
       });
@@ -517,19 +545,23 @@ export async function parseAndStoreGmailMessage(
     );
 
     let newChargeId: string;
+    let mChargeOut: ReturnType<typeof packMoney>;
     if (orphanRev) {
       const voidedNote = `${VOIDED_BY_PRIOR_REVERSAL_SUBSTRING}. Spend excluded.`;
+      const mOrphan = packMoney(extracted.amount, extracted.currency);
+      mChargeOut = mOrphan;
       newChargeId = await prisma.$transaction(async (db) => {
         const charge = await db.transaction.create({
           data: {
             userId,
-            amount: extracted.amount,
-            currency: extracted.currency,
+            amount: mOrphan.amount,
+            currency: mOrphan.currency,
             occurredAt: parseOccurredAt(extracted.date),
             merchant: extracted.merchant ?? undefined,
-            notes: extracted.notes
-              ? `${extracted.notes} | ${voidedNote}`
-              : voidedNote,
+            notes: mergeImportNotes(
+              extracted.notes ? `${extracted.notes} | ${voidedNote}` : voidedNote,
+              mOrphan.fxNote,
+            ),
             source: "email",
             rawSnippet: combined.slice(0, 4000),
             externalId,
@@ -546,14 +578,16 @@ export async function parseAndStoreGmailMessage(
         return charge.id;
       });
     } else {
+      const mCharge = packMoney(extracted.amount, extracted.currency);
+      mChargeOut = mCharge;
       const createdCharge = await prisma.transaction.create({
         data: {
           userId,
-          amount: extracted.amount,
-          currency: extracted.currency,
+          amount: mCharge.amount,
+          currency: mCharge.currency,
           occurredAt: parseOccurredAt(extracted.date),
           merchant: extracted.merchant ?? undefined,
-          notes: extracted.notes ?? undefined,
+          notes: mergeImportNotes(extracted.notes, mCharge.fxNote),
           source: "email",
           rawSnippet: combined.slice(0, 4000),
           externalId,
@@ -568,8 +602,8 @@ export async function parseAndStoreGmailMessage(
     createdTransactions.push({
       id: newChargeId,
       merchant: extracted.merchant ?? null,
-      amount: extracted.amount,
-      currency: extracted.currency,
+      amount: mChargeOut.amount,
+      currency: mChargeOut.currency,
       occurredAt: parseOccurredAt(extracted.date).toISOString(),
       kind: "charge",
     });

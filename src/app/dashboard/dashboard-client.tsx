@@ -31,6 +31,7 @@ import {
 } from "./transaction-edit-modal";
 import { useTheme } from "@/components/theme-provider";
 import { useDisplayCurrency } from "@/lib/display-currency-context";
+import type { ImportStoreCurrency } from "@/lib/import-currency-convert";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Suspense,
@@ -432,6 +433,11 @@ function DashboardClientImpl({
   }>({ column: "date", dir: "desc" });
   const MAX_BATCH_SELECTION = 10;
 
+  type PreferredImportCurrency = ImportStoreCurrency | null;
+  const [preferredImportCurrency, setPreferredImportCurrency] =
+    useState<PreferredImportCurrency>(null);
+  const [importPrefBusy, setImportPrefBusy] = useState(false);
+
   const showParseSuccessToast = useCallback((text: string) => {
     if (parseToastTimerRef.current) clearTimeout(parseToastTimerRef.current);
     setParseToast(text);
@@ -500,6 +506,56 @@ function DashboardClientImpl({
     customRangeFrom,
     customRangeTo,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/user/preferences");
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as {
+          preferredImportCurrency: PreferredImportCurrency;
+        };
+        if (!cancelled) {
+          setPreferredImportCurrency(data.preferredImportCurrency ?? null);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persistPreferredImportCurrency = useCallback(
+    async (next: PreferredImportCurrency) => {
+      const snapshot = preferredImportCurrency;
+      setPreferredImportCurrency(next);
+      setImportPrefBusy(true);
+      try {
+        const res = await fetch("/api/user/preferences", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ preferredImportCurrency: next }),
+        });
+        const data = (await res.json()) as {
+          preferredImportCurrency?: PreferredImportCurrency;
+          error?: string;
+        };
+        if (res.ok) {
+          setPreferredImportCurrency(data.preferredImportCurrency ?? null);
+        } else {
+          setPreferredImportCurrency(snapshot);
+        }
+      } catch {
+        setPreferredImportCurrency(snapshot);
+      } finally {
+        setImportPrefBusy(false);
+      }
+    },
+    [preferredImportCurrency],
+  );
 
   const range = useMemo(() => {
     if (dateRangeMode === "custom" && customRangeFrom && customRangeTo) {
@@ -2371,7 +2427,9 @@ function DashboardClientImpl({
             <div>
               <h2 className="text-lg font-medium">Settings</h2>
               <p className="mt-1 text-xs text-zinc-500">
-                Appearance and display preferences for this browser.
+                Theme is saved in this browser. Preferred import currency is saved
+                to your account and used when parsing email, paste, and receipt
+                uploads.
               </p>
             </div>
             <div className="space-y-3">
@@ -2408,6 +2466,54 @@ function DashboardClientImpl({
                 >
                   Dark
                 </button>
+              </div>
+            </div>
+            <div className="space-y-3 border-t border-zinc-100 pt-6 dark:border-zinc-800">
+              <h3 className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                Preferred import currency
+              </h3>
+              <p className="text-xs text-zinc-500">
+                When you choose USD, SGD, or EUR, new transactions are stored in
+                that currency. If the receipt is in another currency, the amount is
+                converted using Frankfurter&apos;s latest USD-based rates at the
+                moment you import. A short note is added to the transaction when a
+                conversion runs.
+              </p>
+              <div
+                className="flex flex-wrap gap-2"
+                role="group"
+                aria-label="Preferred import currency"
+                aria-busy={importPrefBusy}
+              >
+                <button
+                  type="button"
+                  disabled={importPrefBusy}
+                  onClick={() => void persistPreferredImportCurrency(null)}
+                  className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:opacity-60 ${
+                    preferredImportCurrency === null
+                      ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                      : "border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900/60"
+                  }`}
+                >
+                  Receipt currency
+                </button>
+                {(["USD", "SGD", "EUR"] as const satisfies readonly ImportStoreCurrency[]).map(
+                  (code) => (
+                    <button
+                      key={code}
+                      type="button"
+                      disabled={importPrefBusy}
+                      onClick={() => void persistPreferredImportCurrency(code)}
+                      className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors disabled:opacity-60 ${
+                        preferredImportCurrency === code
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900/60"
+                      }`}
+                    >
+                      {code}
+                    </button>
+                  ),
+                )}
               </div>
             </div>
             <div className="space-y-2 border-t border-zinc-100 pt-6 dark:border-zinc-800">

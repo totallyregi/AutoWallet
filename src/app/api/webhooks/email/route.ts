@@ -4,6 +4,10 @@ import {
   parseOccurredAt,
   resolveCategoryId,
 } from "@/lib/gemini";
+import {
+  normalizePreferredImportCurrency,
+  resolveImportAmountAndCurrency,
+} from "@/lib/import-currency-convert";
 import prisma from "@/lib/prisma";
 import { transactionToJson } from "@/lib/transaction-json";
 import { createHash } from "crypto";
@@ -82,14 +86,24 @@ export async function POST(req: NextRequest) {
   const confidence = extracted.confidence ?? 0.75;
   const needsReview = confidence < 0.6;
 
+  const importPref = normalizePreferredImportCurrency(user.preferredImportCurrency);
+  const resolved = await resolveImportAmountAndCurrency(
+    extracted.amount,
+    extracted.currency,
+    importPref,
+  );
+  const notesMerged = [extracted.notes, resolved.fxNote]
+    .filter((x): x is string => Boolean(x?.trim()))
+    .join(" | ");
+
   const tx = await prisma.transaction.create({
     data: {
       userId: user.id,
-      amount: extracted.amount,
-      currency: extracted.currency,
+      amount: resolved.amount,
+      currency: resolved.currency,
       occurredAt: parseOccurredAt(extracted.date),
       merchant: extracted.merchant ?? undefined,
-      notes: extracted.notes ?? undefined,
+      notes: notesMerged || undefined,
       source: "email",
       rawSnippet: combined.slice(0, 4000),
       externalId,
