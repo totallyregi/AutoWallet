@@ -1,7 +1,11 @@
 "use client";
 
 import type { TransactionJson } from "@/lib/transaction-json";
-import { useEffect, useState } from "react";
+import {
+  convertViaUsdRates,
+  fetchFrankfurterUsdLatestRates,
+} from "@/lib/import-currency-convert";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type CategoryOption = { id: string; name: string; slug: string };
 
@@ -23,9 +27,28 @@ function normalizeTxCurrency(raw: string | undefined): TxCurrency {
   return (TX_CURRENCIES as readonly string[]).includes(u) ? (u as TxCurrency) : "USD";
 }
 
-function localDatetimeInputValue(d: Date): string {
-  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
+/** `YYYY-MM-DD` and `HH:mm` in the user's local timezone (for native date / time inputs). */
+function localDateAndTimeParts(d: Date): { date: string; time: string } {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return { date: `${y}-${mo}-${day}`, time: `${h}:${mi}` };
+}
+
+function localDateTimeFromParts(dateStr: string, timeStr: string): Date {
+  const [y, mo, d] = dateStr.split("-").map((x) => Number.parseInt(x, 10));
+  const [hh, mm] = timeStr.split(":").map((x) => Number.parseInt(x, 10));
+  return new Date(
+    y || 1970,
+    (mo || 1) - 1,
+    d || 1,
+    Number.isFinite(hh) ? hh : 0,
+    Number.isFinite(mm) ? mm : 0,
+    0,
+    0,
+  );
 }
 
 type TransactionEditModalProps =
@@ -55,11 +78,28 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
 
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState<TxCurrency>("USD");
-  const [occurredAt, setOccurredAt] = useState("");
+  const [occurredAtDate, setOccurredAtDate] = useState(() => new Date());
   const [merchant, setMerchant] = useState("");
   const [notes, setNotes] = useState("");
   const [categoryId, setCategoryId] = useState<string>("");
   const [needsReview, setNeedsReview] = useState(false);
+  const [fxRates, setFxRates] = useState<Record<string, number> | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetchFrankfurterUsdLatestRates();
+        if (!cancelled) setFxRates(r);
+      } catch {
+        if (!cancelled) setFxRates(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -67,7 +107,7 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
       if (isCreate) {
         setAmount("");
         setCurrency("USD");
-        setOccurredAt(localDatetimeInputValue(new Date()));
+        setOccurredAtDate(new Date());
         setMerchant("");
         setNotes("");
         setCategoryId("");
@@ -77,7 +117,7 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
       if (tx) {
         setAmount(String(tx.amount));
         setCurrency(normalizeTxCurrency(tx.currency));
-        setOccurredAt(tx.occurredAt.slice(0, 16));
+        setOccurredAtDate(new Date(tx.occurredAt));
         setMerchant(tx.merchant ?? "");
         setNotes(tx.notes ?? "");
         setCategoryId(tx.category?.id ?? "");
@@ -86,6 +126,27 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
     });
   }, [open, isCreate, tx]);
 
+  const onCurrencyChange = useCallback(
+    (next: TxCurrency) => {
+      if (next === currency) return;
+      const prev = currency;
+      const n = Number.parseFloat(amount.replace(/,/g, ""));
+      if (Number.isFinite(n) && n > 0 && fxRates) {
+        const converted = convertViaUsdRates(n, prev, next, fxRates);
+        if (converted != null) {
+          setAmount(String(converted));
+        }
+      }
+      setCurrency(next);
+    },
+    [amount, currency, fxRates],
+  );
+
+  const { date: occurredDatePart, time: occurredTimePart } = useMemo(
+    () => localDateAndTimeParts(occurredAtDate),
+    [occurredAtDate],
+  );
+
   if (!open) return null;
   if (!isCreate && !tx) return null;
 
@@ -93,11 +154,11 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
     e.preventDefault();
     const parsedAmount = Number(amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return;
-    if (!occurredAt) return;
+    if (Number.isNaN(occurredAtDate.getTime())) return;
     const payload: TransactionFormPayload = {
       amount: parsedAmount,
       currency,
-      occurredAt: new Date(occurredAt).toISOString(),
+      occurredAt: occurredAtDate.toISOString(),
       merchant: merchant.trim() || null,
       notes: notes.trim() || null,
       categoryId: categoryId || null,
@@ -156,7 +217,7 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
               <select
                 className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-950"
                 value={currency}
-                onChange={(e) => setCurrency(e.target.value as TxCurrency)}
+                onChange={(e) => onCurrencyChange(e.target.value as TxCurrency)}
                 required
               >
                 {TX_CURRENCIES.map((c) => (
@@ -168,16 +229,49 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
             </label>
           </div>
 
-          <label className="block text-sm">
-            <span className="mb-1 block text-xs text-zinc-500">Occurred at</span>
-            <input
-              className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-950"
-              type="datetime-local"
-              value={occurredAt}
-              onChange={(e) => setOccurredAt(e.target.value)}
-              required
-            />
-          </label>
+          <fieldset className="min-w-0 space-y-2 border-0 p-0">
+            <legend className="mb-1 block text-xs font-normal text-zinc-500">
+              Occurred at
+            </legend>
+            <p className="text-xs text-zinc-500">
+              Use your device&apos;s date and time pickers (calendar and clock).
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-sm">
+                <span className="mb-1 block text-xs text-zinc-500">Date</span>
+                <input
+                  className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                  type="date"
+                  value={occurredDatePart}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) return;
+                    setOccurredAtDate(
+                      localDateTimeFromParts(v, occurredTimePart),
+                    );
+                  }}
+                  required
+                />
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-xs text-zinc-500">Time</span>
+                <input
+                  className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                  type="time"
+                  step={60}
+                  value={occurredTimePart}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) return;
+                    setOccurredAtDate(
+                      localDateTimeFromParts(occurredDatePart, v),
+                    );
+                  }}
+                  required
+                />
+              </label>
+            </div>
+          </fieldset>
 
           <label className="block text-sm">
             <span className="mb-1 block text-xs text-zinc-500">Merchant</span>

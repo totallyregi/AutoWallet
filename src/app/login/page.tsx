@@ -14,7 +14,7 @@ export default async function LoginPage() {
     <div className="mx-auto flex min-h-[70vh] max-w-md flex-col justify-center px-4">
       <h1 className="mb-2 text-2xl font-semibold tracking-tight">Sign in</h1>
       <p className="mb-8 text-sm text-zinc-600 dark:text-zinc-400">
-        Finance Tracker — use your email account or Google when configured.
+        AutoWallet — use your email account or Google when configured.
       </p>
       <LoginForm hasGoogle={hasGoogle} />
       <p className="mt-8 text-xs text-zinc-500">

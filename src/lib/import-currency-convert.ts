@@ -37,6 +37,31 @@ export async function fetchFrankfurterUsdLatestRates(): Promise<Record<string, n
 }
 
 /**
+ * `rates[c]` = units of `c` per 1 USD. Converts `amount` expressed in `fromCurrency` into `toCurrency`.
+ */
+export function convertViaUsdRates(
+  amount: number,
+  fromCurrency: string,
+  toCurrency: string,
+  rates: Record<string, number>,
+): number | null {
+  const from = normalizeRawCurrency(fromCurrency);
+  const to = normalizeRawCurrency(toCurrency);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  if (from === to) return roundMoney2(amount);
+
+  const merged = { ...FALLBACK_USD_RATES, ...rates };
+  const rFrom = merged[from];
+  const toUsd =
+    from === "USD" ? amount : amount / (rFrom && rFrom > 0 ? rFrom : Number.NaN);
+  if (!Number.isFinite(toUsd)) return null;
+  const out =
+    to === "USD" ? toUsd : toUsd * (merged[to] && merged[to] > 0 ? merged[to] : Number.NaN);
+  if (!Number.isFinite(out) || out <= 0) return null;
+  return roundMoney2(out);
+}
+
+/**
  * `rates[c]` = units of currency `c` per 1 USD (Frankfurter `from=USD`).
  * Converts `amount` in `fromCurrency` into `preferred` when they differ.
  */

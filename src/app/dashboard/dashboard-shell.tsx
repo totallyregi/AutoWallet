@@ -49,7 +49,7 @@ export function DashboardShell({
       <div className="mx-auto flex min-h-full w-full max-w-[1500px] flex-col px-4 py-6 sm:px-6 lg:px-8">
         <nav className="mb-10 flex flex-wrap items-center justify-between gap-4">
           <Link href="/dashboard" className="text-lg font-semibold tracking-tight">
-            Finance Tracker
+            AutoWallet
           </Link>
           <div className="flex flex-wrap items-center justify-end gap-3 sm:gap-4">
             <CurrencySelect />

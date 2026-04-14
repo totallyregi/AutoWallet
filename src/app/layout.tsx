@@ -3,7 +3,7 @@ import { Providers } from "@/components/providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Finance Tracker",
+  title: "AutoWallet",
   description: "AI-powered expense tracking from emails and receipts",
 };
 
