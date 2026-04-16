@@ -270,6 +270,52 @@ type Summary = {
   topMerchants: { name: string; amount: number }[];
 };
 
+type CoachInsightTone = "neutral" | "positive" | "warning";
+
+type CoachInsight = {
+  title: string;
+  body: string;
+  tone: CoachInsightTone;
+};
+
+type RangeComparison = {
+  previousPeriod: { from: string; to: string };
+  previousYear: { from: string; to: string };
+};
+
+function buildComparisonRanges(fromIso: string, toIso: string): RangeComparison | null {
+  const from = new Date(fromIso);
+  const to = new Date(toIso);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return null;
+  if (to.getTime() < from.getTime()) return null;
+
+  const durationMs = to.getTime() - from.getTime();
+  const previousTo = new Date(from.getTime() - 1);
+  const previousFrom = new Date(previousTo.getTime() - durationMs);
+
+  const previousYearFrom = new Date(from);
+  previousYearFrom.setUTCFullYear(previousYearFrom.getUTCFullYear() - 1);
+  const previousYearTo = new Date(to);
+  previousYearTo.setUTCFullYear(previousYearTo.getUTCFullYear() - 1);
+
+  return {
+    previousPeriod: {
+      from: previousFrom.toISOString(),
+      to: previousTo.toISOString(),
+    },
+    previousYear: {
+      from: previousYearFrom.toISOString(),
+      to: previousYearTo.toISOString(),
+    },
+  };
+}
+
+function percentChange(current: number, baseline: number): number | null {
+  if (!Number.isFinite(current) || !Number.isFinite(baseline)) return null;
+  if (baseline <= 0) return null;
+  return ((current - baseline) / baseline) * 100;
+}
+
 type TransactionSortColumn = "date" | "merchant" | "category" | "source" | "amount";
 
 function TransactionSortHeader({
@@ -362,7 +408,12 @@ function DashboardClientImpl({
   const [spendFilterReady, setSpendFilterReady] = useState(false);
   const [transactions, setTransactions] = useState<TransactionJson[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [previousPeriodSummary, setPreviousPeriodSummary] = useState<Summary | null>(
+    null,
+  );
+  const [previousYearSummary, setPreviousYearSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [insightsRequested, setInsightsRequested] = useState(false);
   const [receiptQueue, setReceiptQueue] = useState<{ id: string; file: File }[]>(
     [],
   );
@@ -527,6 +578,10 @@ function DashboardClientImpl({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    setInsightsRequested(false);
+  }, [range.from, range.to]);
 
   const persistPreferredImportCurrency = useCallback(
     async (next: PreferredImportCurrency) => {
@@ -816,9 +871,23 @@ function DashboardClientImpl({
 
   const load = useCallback(async (options?: { preserveMessage?: boolean }) => {
     setLoading(true);
+    setPreviousPeriodSummary(null);
+    setPreviousYearSummary(null);
     if (!options?.preserveMessage) setMessage(null);
     try {
+      const comparisonRanges = buildComparisonRanges(range.from, range.to);
       const q = `from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`;
+      const fetchSummary = async (from: string, to: string): Promise<Summary | null> => {
+        try {
+          const res = await fetch(
+            `/api/transactions/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+          );
+          if (!res.ok) return null;
+          return (await res.json()) as Summary;
+        } catch {
+          return null;
+        }
+      };
       const [tRes, sRes] = await Promise.all([
         fetch(`/api/transactions?${q}`),
         fetch(`/api/transactions/summary?${q}`),
@@ -828,6 +897,20 @@ function DashboardClientImpl({
       const sJson = (await sRes.json()) as Summary;
       setTransactions(tJson.transactions);
       setSummary(sJson);
+      if (comparisonRanges) {
+        const [previousPeriod, previousYear] = await Promise.all([
+          fetchSummary(
+            comparisonRanges.previousPeriod.from,
+            comparisonRanges.previousPeriod.to,
+          ),
+          fetchSummary(
+            comparisonRanges.previousYear.from,
+            comparisonRanges.previousYear.to,
+          ),
+        ]);
+        setPreviousPeriodSummary(previousPeriod);
+        setPreviousYearSummary(previousYear);
+      }
     } catch {
       setMessage("Could not load data. Check your session and database.");
     } finally {
@@ -1658,6 +1741,91 @@ function DashboardClientImpl({
       value: b.amount,
     })) ?? [];
 
+  const coachInsights = useMemo(() => {
+    if (!summary) return [] as CoachInsight[];
+
+    const insights: CoachInsight[] = [];
+    const total = summary.total;
+    const topCategory = summary.byCategory[0] ?? null;
+    const secondCategory = summary.byCategory[1] ?? null;
+    const topMerchant = summary.topMerchants[0] ?? null;
+
+    if (topCategory && total > 0) {
+      const topTwoTotal = topCategory.amount + (secondCategory?.amount ?? 0);
+      const topTwoPct = (topTwoTotal / total) * 100;
+      insights.push({
+        title: "Spending concentration",
+        body:
+          secondCategory && topTwoPct >= 45
+            ? `${topCategory.name} and ${secondCategory.name} make up ${topTwoPct.toFixed(1)}% of this period's spend.`
+            : `${topCategory.name} is your largest category at ${topCategory.percentage.toFixed(1)}% of total spend.`,
+        tone: topCategory.percentage >= 40 ? "warning" : "neutral",
+      });
+    }
+
+    const periodDelta = percentChange(
+      summary.total,
+      previousPeriodSummary?.total ?? Number.NaN,
+    );
+    if (periodDelta != null) {
+      const up = periodDelta > 0;
+      insights.push({
+        title: "Trend vs previous period",
+        body: `${up ? "Up" : "Down"} ${Math.abs(periodDelta).toFixed(1)}% compared with the immediately previous period.`,
+        tone: up ? "warning" : "positive",
+      });
+    }
+
+    const yearDelta = percentChange(
+      summary.total,
+      previousYearSummary?.total ?? Number.NaN,
+    );
+    if (yearDelta != null) {
+      const up = yearDelta > 0;
+      insights.push({
+        title: "Year-over-year check",
+        body: `${up ? "Higher" : "Lower"} by ${Math.abs(yearDelta).toFixed(1)}% compared with the same timeframe last year.`,
+        tone: up ? "warning" : "positive",
+      });
+    }
+
+    const actions: CoachInsight[] = [];
+    if (topCategory && topCategory.percentage >= 30) {
+      const cut = topCategory.amount * 0.1;
+      actions.push({
+        title: "Action: cap the biggest category",
+        body: `Set a target to trim ${topCategory.name} by about 10% next period (around ${formatMoneyFromUsdAggregate(cut)}).`,
+        tone: "neutral",
+      });
+    }
+
+    if (topMerchant && total > 0 && topMerchant.amount / total >= 0.18) {
+      actions.push({
+        title: "Action: review top merchant",
+        body: `${topMerchant.name} is a large driver this period. Audit recurring or impulse charges there and set a merchant-specific budget cap.`,
+        tone: "neutral",
+      });
+    }
+
+    if (summary.needsReviewCount > 0) {
+      actions.push({
+        title: "Action: clear review queue",
+        body: `${summary.needsReviewCount} transactions still need review; fixing these first improves next period's category accuracy.`,
+        tone: "neutral",
+      });
+    }
+
+    if (actions.length < 2) {
+      actions.push({
+        title: "Action: enforce a weekly check-in",
+        body: "Run a weekly 10-minute review of top categories and merchants so overspending is corrected before month-end.",
+        tone: "neutral",
+      });
+    }
+
+    return [...insights.slice(0, 3), ...actions.slice(0, 2)];
+  }, [summary, previousPeriodSummary, previousYearSummary, formatMoneyFromUsdAggregate]);
+
   const tabButtonClass = (tabId: (typeof TABS)[number]["id"]) =>
     `rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200 ${
       activeTab === tabId
@@ -1717,6 +1885,64 @@ function DashboardClientImpl({
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === "overview" && (
+          <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-medium">Financial coach</h2>
+                <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                  Deterministic insights for your selected range:{" "}
+                  {new Date(range.from).toLocaleDateString()} —{" "}
+                  {new Date(range.to).toLocaleDateString()}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInsightsRequested(true)}
+                disabled={loading}
+                className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              >
+                {loading
+                  ? "Loading…"
+                  : insightsRequested
+                    ? "Insights generated"
+                    : "Generate insights"}
+              </button>
+            </div>
+            {!insightsRequested ? (
+              <p className="text-sm text-zinc-500">
+                Press <span className="font-medium">Generate insights</span> to analyze this range.
+              </p>
+            ) : loading ? (
+              <p className="text-sm text-zinc-500">Generating insights…</p>
+            ) : coachInsights.length === 0 ? (
+              <p className="text-sm text-zinc-500">
+                Not enough data in this range to generate insights yet.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {coachInsights.map((insight, idx) => (
+                  <li
+                    key={`${insight.title}-${idx}`}
+                    className={`rounded-lg border px-3 py-2 ${
+                      insight.tone === "warning"
+                        ? "border-amber-300 bg-amber-50/70 dark:border-amber-700/50 dark:bg-amber-900/20"
+                        : insight.tone === "positive"
+                          ? "border-emerald-300 bg-emerald-50/70 dark:border-emerald-700/50 dark:bg-emerald-900/20"
+                          : "border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/40"
+                    }`}
+                  >
+                    <p className="text-sm font-medium">{insight.title}</p>
+                    <p className="mt-0.5 text-sm text-zinc-700 dark:text-zinc-300">
+                      {insight.body}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         )}
 
         {message && (
