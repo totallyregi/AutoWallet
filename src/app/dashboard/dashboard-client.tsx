@@ -579,10 +579,6 @@ function DashboardClientImpl({
     };
   }, []);
 
-  useEffect(() => {
-    setInsightsRequested(false);
-  }, [range.from, range.to]);
-
   const persistPreferredImportCurrency = useCallback(
     async (next: PreferredImportCurrency) => {
       const snapshot = preferredImportCurrency;
@@ -629,6 +625,10 @@ function DashboardClientImpl({
     spendYear,
     spendMonth,
   ]);
+
+  useEffect(() => {
+    setInsightsRequested(false);
+  }, [range.from, range.to]);
 
   const handleDateRangeModeChange = useCallback(
     (next: DateRangeMode) => {
@@ -1907,7 +1907,7 @@ function DashboardClientImpl({
                 {loading
                   ? "Loading…"
                   : insightsRequested
-                    ? "Insights generated"
+                    ? "Regenerate insights"
                     : "Generate insights"}
               </button>
             </div>
