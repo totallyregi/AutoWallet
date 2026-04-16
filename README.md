@@ -1,4 +1,4 @@
-# AI-Powered Finance Tracker
+# AutoWallet
 
 Next.js (App Router) + TypeScript app that logs expenses from **bank-style emails** and **receipt images**, using the **Google Gemini API** for extraction, with a **dashboard** for totals, category percentages, and time filters. Deploys cleanly on **Vercel** with **PostgreSQL** (Prisma).
 
@@ -24,13 +24,21 @@ Next.js (App Router) + TypeScript app that logs expenses from **bank-style email
 ### Setup
 
 ```bash
-cd FinanceTracker
+git clone https://github.com/<your-username>/AutoWallet.git
+cd AutoWallet
 cp .env.example .env
 # Edit .env — set DATABASE_URL, AUTH_SECRET, GEMINI_API_KEY, NEXTAUTH_URL
 npm install
 npx prisma migrate deploy   # or: npx prisma migrate dev --name init
 npx prisma db seed
 npm run dev
+```
+
+If you already cloned this repo under the old folder name, you can rename it locally:
+
+```bash
+mv FinanceTracker AutoWallet
+cd AutoWallet
 ```
 
 Open [http://localhost:3000](http://localhost:3000). After seed, sign in with:

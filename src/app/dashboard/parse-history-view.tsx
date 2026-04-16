@@ -8,7 +8,7 @@ import {
 } from "./parse-job-finished-summary";
 import type { ParseJobResultRow } from "./parse-job-types";
 
-export const PARSE_HISTORY_STORAGE_KEY = "finance-tracker:parseHistory";
+export const PARSE_HISTORY_STORAGE_KEY = "autowallet:parseHistory";
 const PARSE_HISTORY_MAX = 40;
 
 export type ParseHistoryEntry = {

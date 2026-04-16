@@ -96,7 +96,7 @@ const MONTH_OPTIONS = [
   { value: 12, label: "December" },
 ] as const;
 
-const SPEND_FILTER_STORAGE_KEY = "finance-tracker:spendFilter";
+const SPEND_FILTER_STORAGE_KEY = "autowallet:spendFilter";
 /** Inclusive rolling window ending at the current calendar year. */
 const SPEND_YEAR_WINDOW = 10;
 

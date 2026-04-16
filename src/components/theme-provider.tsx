@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 
-const STORAGE_KEY = "finance-tracker:theme";
+const STORAGE_KEY = "autowallet:theme";
 
 export type ThemeMode = "light" | "dark";
 

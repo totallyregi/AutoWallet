@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 
-const STORAGE_KEY = "finance-tracker:displayCurrency";
+const STORAGE_KEY = "autowallet:displayCurrency";
 
 /** Currencies supported for display (conversion via Frankfurter, USD-based). */
 export type DisplayCurrency = "USD" | "SGD" | "EUR";
