@@ -922,6 +922,11 @@ function DashboardClientImpl({
     void load();
   }, [load]);
 
+  const onGenerateInsights = useCallback(() => {
+    setInsightsRequested(true);
+    void load({ preserveMessage: true });
+  }, [load]);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -1900,7 +1905,7 @@ function DashboardClientImpl({
               </div>
               <button
                 type="button"
-                onClick={() => setInsightsRequested(true)}
+                onClick={onGenerateInsights}
                 disabled={loading}
                 className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
               >
