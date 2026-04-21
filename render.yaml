@@ -1,0 +1,11 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Deploy: Dashboard → New → Blueprint → connect this repo, or paste this file.
+
+services:
+  - type: web
+    name: autowallet
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npx prisma migrate deploy && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/auth/session
