@@ -35,7 +35,7 @@ export function DateRangeControls({
   monthOptions,
 }: DateRangeControlsProps) {
   const fieldH = "h-9";
-  const controlBox = `w-full ${fieldH} min-w-0 rounded-lg border border-zinc-300 bg-white px-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100`;
+  const controlBox = `w-full ${fieldH} min-w-0 aw-input px-2 text-sm`;
 
   return (
     <div className="ms-auto flex w-full max-w-md flex-col gap-2">
@@ -45,8 +45,8 @@ export function DateRangeControls({
           onClick={() => onDateRangeModeChange("quick")}
           className={`${modeBtn} ${
             dateRangeMode === "quick"
-              ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900/50"
+              ? "border-transparent bg-gradient-to-br from-emerald-400 to-teal-400 font-semibold text-emerald-950 shadow"
+              : "border-[var(--aw-border)] text-[var(--aw-muted)] hover:border-emerald-400/40 hover:text-[var(--foreground)]"
           }`}
         >
           By month &amp; year
@@ -56,8 +56,8 @@ export function DateRangeControls({
           onClick={() => onDateRangeModeChange("custom")}
           className={`${modeBtn} ${
             dateRangeMode === "custom"
-              ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900/50"
+              ? "border-transparent bg-gradient-to-br from-emerald-400 to-teal-400 font-semibold text-emerald-950 shadow"
+              : "border-[var(--aw-border)] text-[var(--aw-muted)] hover:border-emerald-400/40 hover:text-[var(--foreground)]"
           }`}
         >
           Custom range

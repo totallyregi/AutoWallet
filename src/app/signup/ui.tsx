@@ -61,7 +61,7 @@ export function SignUpForm() {
       <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
         Name
         <input
-          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+          className="aw-input mt-1.5 w-full px-3.5 py-2.5"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -72,7 +72,7 @@ export function SignUpForm() {
       <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
         Email
         <input
-          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+          className="aw-input mt-1.5 w-full px-3.5 py-2.5"
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -83,7 +83,7 @@ export function SignUpForm() {
       <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
         Password
         <input
-          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+          className="aw-input mt-1.5 w-full px-3.5 py-2.5"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
@@ -95,7 +95,7 @@ export function SignUpForm() {
       <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
         Confirm password
         <input
-          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+          className="aw-input mt-1.5 w-full px-3.5 py-2.5"
           type="password"
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
@@ -112,13 +112,13 @@ export function SignUpForm() {
       <button
         type="submit"
         disabled={pending}
-        className="h-11 rounded-lg bg-zinc-900 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+        className="aw-btn-primary mt-1 h-11 text-sm"
       >
         {pending ? "Creating account..." : "Create account"}
       </button>
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
         Already have an account?{" "}
-        <Link className="font-medium underline" href="/login">
+        <Link className="font-semibold text-emerald-500 hover:underline" href="/login">
           Sign in
         </Link>
       </p>

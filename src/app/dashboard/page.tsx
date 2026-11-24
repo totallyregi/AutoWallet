@@ -2,14 +2,16 @@ import { auth } from "@/auth";
 import prisma from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { DashboardShell } from "./dashboard-shell";
+import { isDemoEmail } from "@/lib/demo";
 
 export default async function DashboardPage() {
   const session = await auth();
   if (!session?.user) redirect("/login");
 
-  const googleOAuthEnabled = Boolean(
-    process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
-  );
+  // Demo accounts are throwaway, so Gmail linking is switched off for them.
+  const isDemo = isDemoEmail(session.user.email);
+  const googleOAuthEnabled =
+    !isDemo && Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 
   const googleAccount = await prisma.account.findFirst({
     where: { userId: session.user.id, provider: "google" },
@@ -36,6 +38,7 @@ export default async function DashboardPage() {
       googleOAuthEnabled={googleOAuthEnabled}
       gmailConnection={gmailConnection}
       gmailDisplayEmail={session.user.email ?? null}
+      isDemo={isDemo}
     />
   );
 }

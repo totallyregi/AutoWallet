@@ -56,22 +56,30 @@ import {
 } from "recharts";
 
 const COLORS = [
-  "#0ea5e9",
-  "#8b5cf6",
-  "#f97316",
-  "#22c55e",
-  "#eab308",
-  "#ec4899",
-  "#64748b",
+  "#34d399",
+  "#2dd4bf",
+  "#a3e635",
+  "#fbbf24",
+  "#60a5fa",
+  "#f472b6",
+  "#94a3b8",
 ];
 
+const AW_TOOLTIP = {
+  background: "rgba(10,16,14,0.95)",
+  border: "1px solid rgba(52,211,153,0.3)",
+  borderRadius: 12,
+  boxShadow: "0 12px 30px rgba(0,0,0,0.4)",
+  fontSize: 12,
+};
+
 const TABS = [
-  { id: "overview", label: "Overview" },
-  { id: "gmail", label: "Gmail" },
-  { id: "capture", label: "Capture" },
-  { id: "transactions", label: "Transactions" },
-  { id: "parse-history", label: "Parse history" },
-  { id: "settings", label: "Settings" },
+  { id: "overview", label: "Overview", icon: "M4 13h6V4H4zm10 7h6v-9h-6zM4 20h6v-4H4zm10-12h6V4h-6z" },
+  { id: "gmail", label: "Gmail", icon: "M3 7l9 6 9-6M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" },
+  { id: "capture", label: "Capture", icon: "M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" },
+  { id: "transactions", label: "Transactions", icon: "M4 6h16M4 12h16M4 18h10" },
+  { id: "parse-history", label: "Parse history", icon: "M12 8v4l3 2M21 12a9 9 0 1 1-3-6.7M21 4v4h-4" },
+  { id: "settings", label: "Settings", icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 13.7H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10.3 3V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -953,6 +961,8 @@ function DashboardClientImpl({
       } catch {
         // Ignore settings fetch errors; user can still use app.
       }
+      // Without a linked Gmail account the inbox request can only fail.
+      if (gmailConnection !== "connected") return;
       setGmailLoading(true);
       try {
         const { messages, nextPageToken } = await fetchGmailMessagesPage(null, {
@@ -969,7 +979,7 @@ function DashboardClientImpl({
         setGmailLoading(false);
       }
     })();
-  }, [fetchGmailMessagesPage]);
+  }, [fetchGmailMessagesPage, gmailConnection]);
 
   /** Browsers often omit `file.type` (empty) for HEIC, some PNGs, or "Download" folder picks. */
   function isAllowedReceiptFile(file: File): boolean {
@@ -1831,28 +1841,25 @@ function DashboardClientImpl({
     return [...insights.slice(0, 3), ...actions.slice(0, 2)];
   }, [summary, previousPeriodSummary, previousYearSummary, formatMoneyFromUsdAggregate]);
 
-  const tabButtonClass = (tabId: (typeof TABS)[number]["id"]) =>
-    `rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200 ${
-      activeTab === tabId
-        ? "bg-zinc-900 text-white shadow-sm dark:bg-zinc-100 dark:text-zinc-900"
-        : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-    }`;
-
   return (
     <>
-    <div className="grid items-start gap-6 xl:grid-cols-[250px_minmax(0,1fr)]">
-      <aside className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 xl:sticky xl:top-6 xl:h-fit">
-        <p className="px-3 pb-3 pt-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+    <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-6 xl:grid-cols-[250px_minmax(0,1fr)]">
+      <aside className="aw-card min-w-0 p-3 xl:sticky xl:top-24 xl:h-fit">
+        <p className="px-3 pb-2 pt-1 text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--aw-muted)]">
           Workspace
         </p>
-        <nav className="grid gap-1">
+        <nav className="flex gap-1 overflow-x-auto xl:grid xl:overflow-visible">
           {TABS.map((tab) => (
             <button
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id)}
-              className={`${tabButtonClass(tab.id)} text-left`}
+              data-active={activeTab === tab.id}
+              className="aw-tab shrink-0 text-left"
             >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d={tab.icon} />
+              </svg>
               {tab.label}
             </button>
           ))}
@@ -1861,7 +1868,7 @@ function DashboardClientImpl({
 
       <div className="min-w-0 space-y-6">
         {(activeTab === "overview" || activeTab === "transactions") && (
-          <div className="rounded-2xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-4">
+          <div className="aw-card p-3 sm:p-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
               <div className="shrink-0 lg:max-w-[220px]">
                 <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -1893,7 +1900,7 @@ function DashboardClientImpl({
         )}
 
         {activeTab === "overview" && (
-          <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          <section className="aw-card p-5">
             <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-medium">Financial coach</h2>
@@ -1907,7 +1914,7 @@ function DashboardClientImpl({
                 type="button"
                 onClick={onGenerateInsights}
                 disabled={loading}
-                className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                className="aw-btn-primary h-9 px-4 text-sm"
               >
                 {loading
                   ? "Loading…"
@@ -1959,34 +1966,46 @@ function DashboardClientImpl({
         {activeTab === "overview" && (
           <section className="fade-slide-in space-y-6">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-                <h2 className="text-sm font-medium text-zinc-500">Transactions</h2>
-                <p className="mt-1 text-2xl font-semibold tabular-nums">
+              <div className="aw-card aw-kpi p-5" style={{ ["--kpi" as string]: "#34d399" }}>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-[var(--aw-muted)]">Transactions</h2>
+                  <span className="aw-kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" /></svg></span>
+                </div>
+                <p className="mt-2 font-mono text-[1.7rem] font-semibold tracking-tight tabular-nums">
                   {loading ? "…" : (summary?.transactionCount ?? 0).toLocaleString()}
                 </p>
                 <p className="mt-2 text-xs text-zinc-500">Spend rows in this range</p>
               </div>
-              <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-                <h2 className="text-sm font-medium text-zinc-500">Average</h2>
-                <p className="mt-1 text-2xl font-semibold tabular-nums">
+              <div className="aw-card aw-kpi p-5" style={{ ["--kpi" as string]: "#2dd4bf" }}>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-[var(--aw-muted)]">Average</h2>
+                  <span className="aw-kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 19 10 13l4 4 6-8" /></svg></span>
+                </div>
+                <p className="mt-2 font-mono text-[1.7rem] font-semibold tracking-tight tabular-nums">
                   {loading
                     ? "…"
                     : formatMoneyFromUsdAggregate(summary?.averageTransaction ?? 0)}
                 </p>
                 <p className="mt-2 text-xs text-zinc-500">Per spend transaction</p>
               </div>
-              <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-                <h2 className="text-sm font-medium text-zinc-500">Largest</h2>
-                <p className="mt-1 text-2xl font-semibold tabular-nums">
+              <div className="aw-card aw-kpi p-5" style={{ ["--kpi" as string]: "#fbbf24" }}>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-[var(--aw-muted)]">Largest</h2>
+                  <span className="aw-kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 4v16m-7-7 7 7 7-7" /></svg></span>
+                </div>
+                <p className="mt-2 font-mono text-[1.7rem] font-semibold tracking-tight tabular-nums">
                   {loading
                     ? "…"
                     : formatMoneyFromUsdAggregate(summary?.maxSingle ?? 0)}
                 </p>
                 <p className="mt-2 text-xs text-zinc-500">Single largest charge</p>
               </div>
-              <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-                <h2 className="text-sm font-medium text-zinc-500">Needs review</h2>
-                <p className="mt-1 text-2xl font-semibold tabular-nums">
+              <div className="aw-card aw-kpi p-5" style={{ ["--kpi" as string]: "#fb7185" }}>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-[var(--aw-muted)]">Needs review</h2>
+                  <span className="aw-kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg></span>
+                </div>
+                <p className="mt-2 font-mono text-[1.7rem] font-semibold tracking-tight tabular-nums">
                   {loading ? "…" : (summary?.needsReviewCount ?? 0).toLocaleString()}
                 </p>
                 <p className="mt-2 text-xs text-zinc-500">Open Transactions to resolve</p>
@@ -1994,9 +2013,9 @@ function DashboardClientImpl({
             </div>
 
             <div className="grid gap-6 lg:grid-cols-2">
-              <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-                <h2 className="mb-1 text-lg font-medium">Total spend</h2>
-                <p className="text-3xl font-semibold tabular-nums">
+              <div className="aw-hero-card p-6">
+                <h2 className="mb-1 text-sm font-semibold uppercase tracking-[0.12em] text-emerald-200/80">Total spend</h2>
+                <p className="font-mono text-5xl font-semibold tracking-tight tabular-nums">
                   {loading
                     ? "…"
                     : formatMoneyFromUsdAggregate(summary?.total ?? 0)}
@@ -2005,8 +2024,18 @@ function DashboardClientImpl({
                   Range: {new Date(range.from).toLocaleDateString()} —{" "}
                   {new Date(range.to).toLocaleDateString()}
                 </p>
+                <svg className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 w-full" viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true">
+                  <defs>
+                    <linearGradient id="awSpendFill" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0%" stopColor="#34d399" stopOpacity="0.35" />
+                      <stop offset="100%" stopColor="#34d399" stopOpacity="0" />
+                    </linearGradient>
+                  </defs>
+                  <path d="M0 90 C 40 70, 70 95, 110 72 S 180 40, 220 58 S 300 30, 340 42 S 380 20, 400 28 V120 H0Z" fill="url(#awSpendFill)" />
+                  <path d="M0 90 C 40 70, 70 95, 110 72 S 180 40, 220 58 S 300 30, 340 42 S 380 20, 400 28" fill="none" stroke="#34d399" strokeWidth="2" strokeOpacity="0.7" style={{ ["--len" as string]: 520, strokeDasharray: 520, animation: "awDraw 1.6s cubic-bezier(0.22,1,0.36,1) both" }} />
+                </svg>
               </div>
-              <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+              <div className="aw-card p-6">
                 <h2 className="mb-4 text-lg font-medium">By category</h2>
                 <div className="h-64 w-full">
                   {!loading && chartData.length > 0 ? (
@@ -2027,6 +2056,10 @@ function DashboardClientImpl({
                           ))}
                         </Pie>
                         <Tooltip
+                          contentStyle={AW_TOOLTIP}
+                          itemStyle={{ color: "#e9f2ee" }}
+                          labelStyle={{ color: "#8fa39b" }}
+                          cursor={{ fill: "rgba(52,211,153,0.08)" }}
                           formatter={(value) =>
                             formatMoneyFromUsdAggregate(Number(value ?? 0))
                           }
@@ -2056,7 +2089,7 @@ function DashboardClientImpl({
             </div>
 
             <div className="grid gap-6 lg:grid-cols-2">
-              <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+              <div className="aw-card p-6">
                 <h2 className="mb-4 text-lg font-medium">Spend by month</h2>
                 <div className="h-72 w-full">
                   {!loading && monthChartData.length > 0 ? (
@@ -2082,11 +2115,21 @@ function DashboardClientImpl({
                           }
                         />
                         <Tooltip
+                          contentStyle={AW_TOOLTIP}
+                          itemStyle={{ color: "#e9f2ee" }}
+                          labelStyle={{ color: "#8fa39b" }}
+                          cursor={{ fill: "rgba(52,211,153,0.08)" }}
                           formatter={(value) =>
                             formatMoneyFromUsdAggregate(Number(value ?? 0))
                           }
                         />
-                        <Bar dataKey="amount" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                        <defs>
+                          <linearGradient id="awBar" x1="0" x2="0" y1="0" y2="1">
+                            <stop offset="0%" stopColor="#5eead4" />
+                            <stop offset="100%" stopColor="#10b981" />
+                          </linearGradient>
+                        </defs>
+                        <Bar dataKey="amount" fill="url(#awBar)" radius={[8, 8, 2, 2]} animationDuration={900} />
                       </BarChart>
                     </ResponsiveContainer>
                   ) : (
@@ -2096,7 +2139,7 @@ function DashboardClientImpl({
                   )}
                 </div>
               </div>
-              <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+              <div className="aw-card p-6">
                 <h2 className="mb-4 text-lg font-medium">By source</h2>
                 <div className="h-56 w-full">
                   {!loading && sourceChartData.length > 0 ? (
@@ -2117,6 +2160,10 @@ function DashboardClientImpl({
                           ))}
                         </Pie>
                         <Tooltip
+                          contentStyle={AW_TOOLTIP}
+                          itemStyle={{ color: "#e9f2ee" }}
+                          labelStyle={{ color: "#8fa39b" }}
+                          cursor={{ fill: "rgba(52,211,153,0.08)" }}
                           formatter={(value) =>
                             formatMoneyFromUsdAggregate(Number(value ?? 0))
                           }
@@ -2145,7 +2192,7 @@ function DashboardClientImpl({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="aw-card p-6">
               <h2 className="mb-4 text-lg font-medium">Top merchants</h2>
               {!loading && summary && summary.topMerchants.length > 0 ? (
                 <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -2222,7 +2269,7 @@ function DashboardClientImpl({
 
         {activeTab === "capture" && (
           <section className="fade-slide-in grid gap-6 lg:grid-cols-2 lg:items-stretch">
-            <div className="flex h-full min-h-0 flex-col rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex h-full min-h-0 flex-col aw-card p-6">
               <h2 className="mb-3 text-lg font-medium">Upload receipt</h2>
               <p className="mb-4 min-h-[2.75rem] text-sm leading-snug text-zinc-600 dark:text-zinc-400">
                 Add a photo, screenshot, or PDF.
@@ -2281,7 +2328,7 @@ function DashboardClientImpl({
                 </button>
               </div>
             </div>
-            <div className="flex h-full min-h-0 flex-col rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex h-full min-h-0 flex-col aw-card p-6">
               <h2 className="mb-3 text-lg font-medium">Paste text</h2>
               <p className="mb-4 min-h-[2.75rem] text-sm leading-snug text-zinc-600 dark:text-zinc-400">
                 Paste bank or card notification text here.
@@ -2311,7 +2358,7 @@ function DashboardClientImpl({
         )}
 
         {activeTab === "transactions" && (
-          <section className="fade-slide-in rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          <section className="fade-slide-in aw-card">
             <div className="flex flex-col gap-4 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
               <div>
                 <h2 className="text-lg font-medium">Transactions</h2>
@@ -2428,7 +2475,7 @@ function DashboardClientImpl({
                     setEditTx(null);
                     setCreateTxOpen(true);
                   }}
-                  className="h-9 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                  className="aw-btn-primary h-9 px-4 text-sm"
                 >
                   Add transaction
                 </button>
@@ -2654,7 +2701,7 @@ function DashboardClientImpl({
         )}
 
         {activeTab === "settings" && (
-          <section className="fade-slide-in max-w-xl space-y-8 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+          <section className="fade-slide-in max-w-xl space-y-8 aw-card p-6">
             <div>
               <h2 className="text-lg font-medium">Settings</h2>
               <p className="mt-1 text-xs text-zinc-500">
@@ -2862,7 +2909,7 @@ export function DashboardClient(props: {
   return (
     <Suspense
       fallback={
-        <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-sm text-zinc-500 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="aw-card p-8 text-sm text-zinc-500">
           Loading dashboard…
         </div>
       }

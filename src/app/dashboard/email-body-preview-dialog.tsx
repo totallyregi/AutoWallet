@@ -53,7 +53,7 @@ export function EmailBodyPreviewDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="email-body-preview-title"
-        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
+        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden aw-pop rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-[#0c1311]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">

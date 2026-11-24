@@ -96,7 +96,7 @@ export function ParseHistoryView({
 
   return (
     <section className="fade-slide-in space-y-4">
-      <header className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <header className="aw-card p-5">
         <h1 className="text-2xl font-semibold tracking-tight">Parse history</h1>
         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
           Recent parse runs from Gmail, receipts, and pasted text (stored in this
@@ -142,7 +142,7 @@ export function ParseHistoryView({
             role="dialog"
             aria-modal="true"
             aria-labelledby="parse-history-detail-title"
-            className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
+            className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden aw-pop rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-[#0c1311]"
             onClick={(ev) => ev.stopPropagation()}
           >
             <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">

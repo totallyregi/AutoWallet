@@ -33,7 +33,7 @@ export function LoginForm({ hasGoogle }: { hasGoogle: boolean }) {
       {hasGoogle && (
         <button
           type="button"
-          className="flex h-11 items-center justify-center rounded-lg border border-zinc-300 bg-white text-sm font-medium text-zinc-900 shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+          className="aw-btn-ghost h-11 text-sm"
           onClick={() => signIn("google", { callbackUrl })}
         >
           Continue with Google
@@ -44,14 +44,14 @@ export function LoginForm({ hasGoogle }: { hasGoogle: boolean }) {
           <span className="w-full border-t border-zinc-200 dark:border-zinc-800" />
         </div>
         <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-[var(--background)] px-2 text-zinc-500">or email</span>
+          <span className="rounded-full bg-[var(--aw-card)] px-2 text-zinc-500">or email</span>
         </div>
       </div>
       <form onSubmit={onCredentials} className="flex flex-col gap-3">
         <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
           Email
           <input
-            className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+            className="aw-input mt-1.5 w-full px-3.5 py-2.5"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -62,7 +62,7 @@ export function LoginForm({ hasGoogle }: { hasGoogle: boolean }) {
         <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
           Password
           <input
-            className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+            className="aw-input mt-1.5 w-full px-3.5 py-2.5"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -78,14 +78,14 @@ export function LoginForm({ hasGoogle }: { hasGoogle: boolean }) {
         <button
           type="submit"
           disabled={pending}
-          className="h-11 rounded-lg bg-zinc-900 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+          className="aw-btn-primary mt-1 h-11 text-sm"
         >
           {pending ? "Signing in..." : "Sign in"}
         </button>
       </form>
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
         No account yet?{" "}
-        <Link className="font-medium underline" href="/signup">
+        <Link className="font-semibold text-emerald-500 hover:underline" href="/signup">
           Create one
         </Link>
       </p>

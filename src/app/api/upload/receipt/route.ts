@@ -9,6 +9,7 @@ import {
   resolveImportAmountAndCurrency,
 } from "@/lib/import-currency-convert";
 import prisma from "@/lib/prisma";
+import { demoImportLimitReached } from "@/lib/demo";
 import { transactionToJson } from "@/lib/transaction-json";
 import { put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
@@ -48,6 +49,10 @@ export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const demoLimit = await demoImportLimitReached(session.user.id, session.user.email);
+  if (demoLimit) {
+    return NextResponse.json({ error: demoLimit }, { status: 429 });
   }
 
   const form = await req.formData();

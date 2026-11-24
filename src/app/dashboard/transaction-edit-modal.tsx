@@ -186,7 +186,7 @@ export function TransactionEditModal(props: TransactionEditModalProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
+        className="w-full max-w-xl aw-pop rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-[#0c1311]"
         onClick={(e) => e.stopPropagation()}
       >
         <form onSubmit={submit} className="space-y-4 p-5">

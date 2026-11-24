@@ -40,7 +40,7 @@ export function GmailFilters({
   listLoading,
 }: GmailFiltersProps) {
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950 sm:p-6">
+    <div className="aw-card p-5 sm:p-6">
       <h2 className="text-lg font-medium tracking-tight">Gmail sender filter</h2>
       <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
         Add one or more sender addresses. With no start/end dates, the list includes

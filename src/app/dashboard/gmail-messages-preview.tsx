@@ -130,7 +130,7 @@ export function GmailMessagesPreview({
 
   return (
     <>
-      <div className="rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="aw-card">
         <div className="flex flex-col gap-4 border-b border-zinc-200 p-5 dark:border-zinc-800 sm:flex-row sm:items-start sm:justify-between sm:p-6">
           <div>
             <h2 className="text-lg font-medium tracking-tight">
